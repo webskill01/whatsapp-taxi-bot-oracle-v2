@@ -10,15 +10,15 @@ import makeWASocket, {
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
   fetchLatestBaileysVersion,
-} from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
-import express from 'express';
-import pino from 'pino';
-import fs from 'fs';
-import path from 'path';
+} from "@whiskeysockets/baileys";
+import { Boom } from "@hapi/boom";
+import express from "express";
+import pino from "pino";
+import fs from "fs";
+import path from "path";
 
-import { getMessageFingerprint } from './filter.js';
-import { processPathA, processPathB } from './router.js';
+import { getMessageFingerprint } from "./filter.js";
+import { processPathA, processPathB } from "./router.js";
 import {
   CACHE,
   RECONNECT,
@@ -28,8 +28,8 @@ import {
   MESSAGE,
   RATE_LIMITS,
   CIRCUIT_BREAKER,
-} from './globalDefaults.js';
-import { panic } from './logger.js';
+} from "./globalDefaults.js";
+import { panic } from "./logger.js";
 
 // -----------------------------------------------------------------------------
 // MAIN EXPORT — the single function each bot calls
@@ -102,7 +102,7 @@ export async function startBot(config, log, authDir) {
   };
 
   // B1: Reconnect state tracking
-  let lastReconnectTime = 0;       // timestamp of last reconnect event
+  let lastReconnectTime = 0; // timestamp of last reconnect event
   let botFullyOperational = false; // false until first connection is open
 
   // A4: Settling state — true until first message after connect/reconnect is processed
@@ -125,7 +125,7 @@ export async function startBot(config, log, authDir) {
   function loadFingerprints() {
     try {
       if (fs.existsSync(FINGERPRINT_FILE)) {
-        const data = JSON.parse(fs.readFileSync(FINGERPRINT_FILE, 'utf8'));
+        const data = JSON.parse(fs.readFileSync(FINGERPRINT_FILE, "utf8"));
         const cutoff = Date.now() - CACHE.FINGERPRINT_TTL_MS; // 2-hour TTL
 
         let loaded = 0;
@@ -137,8 +137,8 @@ export async function startBot(config, log, authDir) {
         }
         log.info(`📂 Loaded ${loaded} fingerprints (2h cache)`);
       } else {
-        fs.writeFileSync(FINGERPRINT_FILE, JSON.stringify([]), 'utf8');
-        log.info('📂 Created fingerprint cache file');
+        fs.writeFileSync(FINGERPRINT_FILE, JSON.stringify([]), "utf8");
+        log.info("📂 Created fingerprint cache file");
       }
     } catch (err) {
       log.warn(`⚠️  Fingerprint load failed: ${err.message}`);
@@ -147,14 +147,20 @@ export async function startBot(config, log, authDir) {
 
   function saveFingerprints() {
     try {
-      const data = Array.from(fingerprintSet).map(fp => ({
+      const data = Array.from(fingerprintSet).map((fp) => ({
         fingerprint: fp,
         timestamp: Date.now(),
       }));
       // Cap entries on disk to SAVE_CAP (1000)
-      fs.writeFileSync(FINGERPRINT_FILE, JSON.stringify(data.slice(-CACHE.FINGERPRINT_SAVE_CAP)), 'utf8');
+      fs.writeFileSync(
+        FINGERPRINT_FILE,
+        JSON.stringify(data.slice(-CACHE.FINGERPRINT_SAVE_CAP)),
+        "utf8",
+      );
       fingerprintDirty = false;
-      log.info(`📂 Fingerprints saved (${Math.min(data.length, CACHE.FINGERPRINT_SAVE_CAP)} entries)`);
+      log.info(
+        `📂 Fingerprints saved (${Math.min(data.length, CACHE.FINGERPRINT_SAVE_CAP)} entries)`,
+      );
     } catch (err) {
       log.warn(`⚠️  Fingerprint save failed: ${err.message}`);
     }
@@ -181,7 +187,7 @@ export async function startBot(config, log, authDir) {
   // ---------------------------------------------------------------------------
 
   function normalizePhone(p) {
-    return p.replace(/\D/g, '').slice(-10);
+    return p.replace(/\D/g, "").slice(-10);
   }
 
   // B2: Add a message ID to the replay set. Evicts oldest if over cap.
@@ -217,7 +223,7 @@ export async function startBot(config, log, authDir) {
 
   async function handleMessage(msg) {
     // Only care about group messages
-    if (!msg.key.remoteJid?.endsWith('@g.us')) return;
+    if (!msg.key.remoteJid?.endsWith("@g.us")) return;
 
     // Skip messages sent by this bot (fromMe)
     if (msg.key.fromMe === true) {
@@ -234,7 +240,10 @@ export async function startBot(config, log, authDir) {
     // For the first 30s after a reconnect, only accept messages < 10s old.
     // This prevents the replay flood that Baileys fires on reconnect.
     const timeSinceReconnect = Date.now() - lastReconnectTime;
-    if (lastReconnectTime > 0 && timeSinceReconnect < RECONNECT.STRICT_WINDOW_DURATION) {
+    if (
+      lastReconnectTime > 0 &&
+      timeSinceReconnect < RECONNECT.STRICT_WINDOW_DURATION
+    ) {
       const messageAge = Date.now() - messageTimestampMs;
       if (messageAge > RECONNECT.STRICT_AGE_MS) {
         stats.rejectedByReconnectAgeGate++;
@@ -255,24 +264,24 @@ export async function startBot(config, log, authDir) {
       msg.message?.extendedTextMessage?.text ||
       msg.message?.imageMessage?.caption ||
       msg.message?.videoMessage?.caption ||
-      '';
+      "";
 
-    if (!text || text.trim() === '') {
+    if (!text || text.trim() === "") {
       stats.rejectedEmptyBody++;
       return;
     }
 
     // ── Bot self-send check (phone-level, not just fromMe) ──
     // Preserved from original: checks both group sender and participant fields
-    const senderPhone     = sourceGroup.split('@')[0] || '';
-    const participantPhone = (msg.key.participant || '').split('@')[0] || '';
+    const senderPhone = sourceGroup.split("@")[0] || "";
+    const participantPhone = (msg.key.participant || "").split("@")[0] || "";
 
     if (
-      normalizePhone(senderPhone)     === normalizePhone(config.botPhone) ||
+      normalizePhone(senderPhone) === normalizePhone(config.botPhone) ||
       normalizePhone(participantPhone) === normalizePhone(config.botPhone)
     ) {
       stats.rejectedBotSender++;
-      log.info('🤖 Bot own sender — skipped');
+      log.info("🤖 Bot own sender — skipped");
       return;
     }
 
@@ -282,55 +291,67 @@ export async function startBot(config, log, authDir) {
       return;
     }
 
-    // ── Fingerprint dedup ──
-    const fingerprint = getMessageFingerprint(text, null, messageTimestampMs);
-
-    if (fingerprintSet.has(fingerprint)) {
-      stats.duplicatesSkipped++;
-      log.info('🔁 Duplicate fingerprint — skipped');
-      return;
-    }
-
-    // Add to set NOW (before path processing) — same as original.
-    // Prevents the same message arriving on two source groups from being
-    // processed twice in the same event loop tick.
-    fingerprintSet.add(fingerprint);
-    markDirty();
-
     // ── A4: Settling delay — one-time pause after connect/reconnect ──
     if (needsSettlingDelay) {
       needsSettlingDelay = false;
-      const settleDuration = RECONNECT.SETTLING_MIN +
-        Math.floor(Math.random() * (RECONNECT.SETTLING_MAX - RECONNECT.SETTLING_MIN));
-      log.info(`⏳ Settling delay: ${(settleDuration / 1000).toFixed(1)}s (first message after connect)`);
-      await new Promise(r => setTimeout(r, settleDuration));
+      const settleDuration =
+        RECONNECT.SETTLING_MIN +
+        Math.floor(
+          Math.random() * (RECONNECT.SETTLING_MAX - RECONNECT.SETTLING_MIN),
+        );
+      log.info(
+        `⏳ Settling delay: ${(settleDuration / 1000).toFixed(1)}s (first message after connect)`,
+      );
+      await new Promise((r) => setTimeout(r, settleDuration));
     }
 
     // ── Circuit breaker gate ──
     if (circuitBreaker.isOpen) {
-      log.warn('🔴 Circuit breaker OPEN — message dropped');
+      log.warn("🔴 Circuit breaker OPEN — message dropped");
       return;
     }
 
-    // ── Path detection ──
+    // ── Path detection FIRST ──
     const isPathA = config.sourceGroupIds.includes(sourceGroup);
     const isPathB = sourceGroup === config.freeCommonGroupId;
 
+    // 🚫 If not monitored, EXIT EARLY — no fingerprinting
+    if (!isPathA && !isPathB) {
+      stats.rejectedNotMonitored++;
+      log.warn("🚫 Unmonitored group — skipped");
+      return;
+    }
+
+    // ── Fingerprint dedup (ONLY for monitored groups) ──
+    const fingerprint = getMessageFingerprint(text, null, messageTimestampMs);
+
+    if (fingerprintSet.has(fingerprint)) {
+      stats.duplicatesSkipped++;
+      log.info("🔁 Duplicate fingerprint — skipped");
+      return;
+    }
+
+    // Add fingerprint ONLY now
+    fingerprintSet.add(fingerprint);
+    markDirty();
+
+    // ── Logging ──
     log.info(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    log.info(`📥 MSG #${stats.totalMessagesSent} | ${isPathA ? 'PATH A' : isPathB ? 'PATH B' : 'UNMONITORED'}`);
+    log.info(
+      `📥 MSG #${stats.totalMessagesSent} | ${isPathA ? "PATH A" : "PATH B"}`,
+    );
     log.info(`   From: ${sourceGroup.substring(0, 20)}...`);
-    log.info(`   Text: "${text.substring(0, 60)}${text.length > 60 ? '...' : ''}"`);
+    log.info(
+      `   Text: "${text.substring(0, 60)}${text.length > 60 ? "..." : ""}"`,
+    );
     log.info(`   Fingerprint: ${fingerprint}`);
 
     const ctx = buildRouterContext();
 
     if (isPathA) {
       await processPathA(text, sourceGroup, fingerprint, ctx);
-    } else if (isPathB) {
-      await processPathB(text, sourceGroup, fingerprint, ctx);
     } else {
-      stats.rejectedNotMonitored++;
-      log.warn('🚫 Unmonitored group — skipped');
+      await processPathB(text, sourceGroup, fingerprint, ctx);
     }
   }
 
@@ -343,11 +364,16 @@ export async function startBot(config, log, authDir) {
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
       const { version } = await fetchLatestBaileysVersion();
 
-      log.info(`🔌 Connecting... (attempt ${reconnectAttempts + 1}/${BAILEYS.MAX_RECONNECT_ATTEMPTS})`);
+      log.info(
+        `🔌 Connecting... (attempt ${reconnectAttempts + 1}/${BAILEYS.MAX_RECONNECT_ATTEMPTS})`,
+      );
 
       const baileysLogger = pino({
-        level: 'warn', // suppress Baileys' own verbose info/debug
-        transport: { target: 'pino-pretty', options: { translateTime: true, colorize: true } }
+        level: "warn", // suppress Baileys' own verbose info/debug
+        transport: {
+          target: "pino-pretty",
+          options: { translateTime: true, colorize: true },
+        },
       });
 
       sock = makeWASocket({
@@ -358,36 +384,40 @@ export async function startBot(config, log, authDir) {
         },
         logger: baileysLogger,
         printQRInTerminal: true,
-        browser: ['Taxi Bot', 'Chrome', '120.0'],
+        browser: ["Taxi Bot", "Chrome", "120.0"],
         markOnlineOnConnect: false,
         syncFullHistory: false,
         getMessage: async () => undefined,
         defaultQueryTimeoutMs: BAILEYS.QUERY_TIMEOUT_MS,
-        connectTimeoutMs:      BAILEYS.CONNECT_TIMEOUT_MS,
-        keepAliveIntervalMs:   BAILEYS.KEEP_ALIVE_MS,
+        connectTimeoutMs: BAILEYS.CONNECT_TIMEOUT_MS,
+        keepAliveIntervalMs: BAILEYS.KEEP_ALIVE_MS,
       });
 
-      sock.ev.on('creds.update', saveCreds);
+      sock.ev.on("creds.update", saveCreds);
 
       // ── Connection lifecycle ──
-      sock.ev.on('connection.update', async (update) => {
+      sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-          log.info('📱 QR Code generated — scan with WhatsApp');
+          log.info("📱 QR Code generated — scan with WhatsApp");
           // Print QR to terminal for scanning
-          const qrcodeTerminal = (await import('qrcode-terminal')).default;
+          const qrcodeTerminal = (await import("qrcode-terminal")).default;
           qrcodeTerminal.generate(qr, { small: true });
         }
 
-        if (connection === 'close') {
+        if (connection === "close") {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
-          const isLoggedOut  = statusCode === DisconnectReason.loggedOut;
+          const isLoggedOut = statusCode === DisconnectReason.loggedOut;
 
-          log.warn(`⚠️  Connection closed | statusCode=${statusCode} | loggedOut=${isLoggedOut}`);
+          log.warn(
+            `⚠️  Connection closed | statusCode=${statusCode} | loggedOut=${isLoggedOut}`,
+          );
 
           if (isLoggedOut) {
-            log.error('❌ LOGGED OUT — delete baileys_auth/ and restart to re-scan QR');
+            log.error(
+              "❌ LOGGED OUT — delete baileys_auth/ and restart to re-scan QR",
+            );
             process.exit(1);
           }
 
@@ -395,13 +425,15 @@ export async function startBot(config, log, authDir) {
             // Exponential backoff: 3s, 6s, 12s, 24s, 48s, cap 60s
             const delay = Math.min(
               BAILEYS.BACKOFF_BASE_MS * Math.pow(2, reconnectAttempts),
-              BAILEYS.BACKOFF_CAP_MS
+              BAILEYS.BACKOFF_CAP_MS,
             );
             reconnectAttempts++;
             stats.reconnectCount++;
 
-            log.info(`⏳ Reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/${BAILEYS.MAX_RECONNECT_ATTEMPTS})...`);
-            await new Promise(r => setTimeout(r, delay));
+            log.info(
+              `⏳ Reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/${BAILEYS.MAX_RECONNECT_ATTEMPTS})...`,
+            );
+            await new Promise((r) => setTimeout(r, delay));
 
             // B1: Mark reconnect time so the age gate activates
             lastReconnectTime = Date.now();
@@ -410,13 +442,15 @@ export async function startBot(config, log, authDir) {
 
             connectToWhatsApp();
           } else {
-            log.error('❌ Max reconnect attempts reached — exiting for PM2 restart');
+            log.error(
+              "❌ Max reconnect attempts reached — exiting for PM2 restart",
+            );
             process.exit(1);
           }
         }
 
-        if (connection === 'open') {
-          log.info('✅ WhatsApp connected');
+        if (connection === "open") {
+          log.info("✅ WhatsApp connected");
           reconnectAttempts = 0; // reset on successful connection
 
           if (!botFullyOperational) {
@@ -425,26 +459,34 @@ export async function startBot(config, log, authDir) {
             needsSettlingDelay = true;
             botFullyOperational = true;
 
-            log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            log.info('🎉 BOT FULLY OPERATIONAL');
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("🎉 BOT FULLY OPERATIONAL");
             log.info(`   📍 Source groups:  ${config.sourceGroupIds.length}`);
-            log.info(`   🆓 Free common:   ${config.freeCommonGroupId.substring(0, 20)}...`);
-            log.info(`   💎 Paid groups:   ${Array.isArray(config.paidCommonGroupId) ? config.paidCommonGroupId.length : 1}`);
-            log.info(`   🏙️  City groups:   ${config.configuredCities.length} (${config.configuredCities.join(', ')})`);
-            log.info(`   🚫 Blocked nums:  ${config.blockedPhoneNumbers.length}`);
+            log.info(
+              `   🆓 Free common:   ${config.freeCommonGroupId.substring(0, 20)}...`,
+            );
+            log.info(
+              `   💎 Paid groups:   ${Array.isArray(config.paidCommonGroupId) ? config.paidCommonGroupId.length : 1}`,
+            );
+            log.info(
+              `   🏙️  City groups:   ${config.configuredCities.length} (${config.configuredCities.join(", ")})`,
+            );
+            log.info(
+              `   🚫 Blocked nums:  ${config.blockedPhoneNumbers.length}`,
+            );
             log.info(`   🔵 Path A order:  Paid → City → Free (shuffled)`);
             log.info(`   🟢 Path B order:  Paid → City (shuffled)`);
             log.info(`   🔒 Dedup:         Text fingerprint (5-min windows)`);
             log.info(`   ⏱️  Delivery:      4 targets in 12-15s max`);
-            log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
           }
         }
       });
 
       // ── Message event — THE entry point for all incoming messages ──
-      sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      sock.ev.on("messages.upsert", async ({ messages, type }) => {
         // type === 'notify' means genuinely new messages (not history sync)
-        if (type !== 'notify') return;
+        if (type !== "notify") return;
 
         for (const msg of messages) {
           try {
@@ -454,18 +496,19 @@ export async function startBot(config, log, authDir) {
           }
         }
       });
-
     } catch (err) {
       log.error(`❌ Connection error: ${err.message}`);
 
       if (reconnectAttempts < BAILEYS.MAX_RECONNECT_ATTEMPTS) {
         reconnectAttempts++;
         const delay = Math.min(5000 * reconnectAttempts, 30000);
-        log.info(`⏳ Retry in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/${BAILEYS.MAX_RECONNECT_ATTEMPTS})`);
-        await new Promise(r => setTimeout(r, delay));
+        log.info(
+          `⏳ Retry in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/${BAILEYS.MAX_RECONNECT_ATTEMPTS})`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
         connectToWhatsApp();
       } else {
-        log.error('❌ Max attempts reached — exiting for PM2 restart');
+        log.error("❌ Max attempts reached — exiting for PM2 restart");
         process.exit(1);
       }
     }
@@ -477,54 +520,62 @@ export async function startBot(config, log, authDir) {
   // ---------------------------------------------------------------------------
 
   function startStatsServer() {
-    const statsPort = parseInt(process.env.STATS_PORT || STATS.DEFAULT_PORT, 10);
+    const statsPort = parseInt(
+      process.env.STATS_PORT || STATS.DEFAULT_PORT,
+      10,
+    );
     const app = express();
 
-    app.get('/ping', (_, res) => res.send('ALIVE'));
+    app.get("/ping", (_, res) => res.send("ALIVE"));
 
     // E2: /stats includes botId and full runtime state
-    app.get('/stats', (_, res) => {
+    app.get("/stats", (_, res) => {
       res.json({
         bot: {
-          id:    config.botId,
+          id: config.botId,
           phone: config.botPhone,
         },
-        uptime: ((Date.now() - BOT_START_TIME) / 1000 / 60).toFixed(1) + ' minutes',
+        uptime:
+          ((Date.now() - BOT_START_TIME) / 1000 / 60).toFixed(1) + " minutes",
         operational: botFullyOperational,
         stats,
         messageCount,
         cache: {
           fingerprintSet: fingerprintSet.size,
-          replayIdSet:    replayIdSet.size,
-          dirty:          fingerprintDirty,
+          replayIdSet: replayIdSet.size,
+          dirty: fingerprintDirty,
         },
         circuitBreaker: {
-          isOpen:       circuitBreaker.isOpen,
+          isOpen: circuitBreaker.isOpen,
           failureCount: circuitBreaker.failureCount,
         },
         reconnect: {
-          lastReconnectTime: lastReconnectTime ? new Date(lastReconnectTime).toISOString() : null,
-          totalReconnects:   stats.reconnectCount,
+          lastReconnectTime: lastReconnectTime
+            ? new Date(lastReconnectTime).toISOString()
+            : null,
+          totalReconnects: stats.reconnectCount,
         },
         config: {
           sourceGroupCount: config.sourceGroupIds.length,
-          paidGroupCount:   Array.isArray(config.paidCommonGroupId) ? config.paidCommonGroupId.length : 1,
-          cityGroups:       config.configuredCities,
-          blockedNumbers:   config.blockedPhoneNumbers.length,
-          hourlyLimit:      RATE_LIMITS.HOURLY,
-          dailyLimit:       RATE_LIMITS.DAILY,
+          paidGroupCount: Array.isArray(config.paidCommonGroupId)
+            ? config.paidCommonGroupId.length
+            : 1,
+          cityGroups: config.configuredCities,
+          blockedNumbers: config.blockedPhoneNumbers.length,
+          hourlyLimit: RATE_LIMITS.HOURLY,
+          dailyLimit: RATE_LIMITS.DAILY,
         },
       });
     });
 
     // /groups — lists all groups this bot is a member of (useful for config setup)
-    app.get('/groups', async (_, res) => {
-      if (!sock) return res.status(503).json({ error: 'Not connected' });
+    app.get("/groups", async (_, res) => {
+      if (!sock) return res.status(503).json({ error: "Not connected" });
       try {
         const groupChats = await sock.groupFetchAllParticipating();
-        const groups = Object.values(groupChats).map(chat => ({
-          id:   chat.id,
-          name: chat.subject || 'Unknown',
+        const groups = Object.values(groupChats).map((chat) => ({
+          id: chat.id,
+          name: chat.subject || "Unknown",
           participants: chat.participants?.length || 0,
         }));
         res.json({ bot: config.botId, count: groups.length, groups });
@@ -578,13 +629,13 @@ export async function startBot(config, log, authDir) {
       try {
         sock.ev.removeAllListeners();
         sock.ws.close();
-        log.info('✅ Socket closed');
+        log.info("✅ Socket closed");
       } catch (err) {
         log.warn(`⚠️  Socket close error: ${err.message}`);
       }
     }
 
-    log.info('📊 Final stats:');
+    log.info("📊 Final stats:");
     log.info(`   Messages:    ${stats.totalMessagesSent}`);
     log.info(`   Path A:      ${stats.pathAProcessed}`);
     log.info(`   Path B:      ${stats.pathBProcessed}`);
@@ -597,21 +648,26 @@ export async function startBot(config, log, authDir) {
     process.exit(0);
   }
 
-  process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
-  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-  process.on('SIGHUP',  () => {
-    log.info('🔄 SIGHUP (PM2 reload) — cleaning up timers');
-    if (saveDebounceTimer) { clearTimeout(saveDebounceTimer); saveDebounceTimer = null; }
-    if (circuitBreaker.resetTimeout) { clearTimeout(circuitBreaker.resetTimeout); }
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGHUP", () => {
+    log.info("🔄 SIGHUP (PM2 reload) — cleaning up timers");
+    if (saveDebounceTimer) {
+      clearTimeout(saveDebounceTimer);
+      saveDebounceTimer = null;
+    }
+    if (circuitBreaker.resetTimeout) {
+      clearTimeout(circuitBreaker.resetTimeout);
+    }
   });
 
   // ---------------------------------------------------------------------------
   // BOOT SEQUENCE
   // ---------------------------------------------------------------------------
 
-  log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  log.info('🚀 TAXI BOT STARTING');
-  log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  log.info("🚀 TAXI BOT STARTING");
+  log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   // 1. Load cached fingerprints from disk
   loadFingerprints();
