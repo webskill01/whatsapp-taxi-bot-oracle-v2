@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.production
+
+# WhatsApp Session (will re-authenticate on Oracle)
+.wwebjs_auth/
+.wwebjs_cache/
+
+# PM2
+.pm2/
+
+# Forwarded messages cache
+.forwarded-messages.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.ps1
+
+# Local development
+my-whatsapp-groups.csv
+my-whatsapp-groups.json
+baileys_auth/
+.forwarded-messages.json
+logs/
+node_modules/
