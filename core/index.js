@@ -222,138 +222,153 @@ export async function startBot(config, log, authDir) {
   // ---------------------------------------------------------------------------
 
   async function handleMessage(msg) {
-    // Only care about group messages
-    if (!msg.key.remoteJid?.endsWith("@g.us")) return;
+  // Only care about group messages
+  if (!msg.key.remoteJid?.endsWith("@g.us")) return;
 
-    // Skip messages sent by this bot (fromMe)
-    if (msg.key.fromMe === true) {
-      stats.rejectedFromMe++;
-      return;
-    }
+  // Skip messages sent by this bot (fromMe)
+  if (msg.key.fromMe === true) {
+    stats.rejectedFromMe++;
+    return;
+  }
 
-    const msgId = msg.key.id;
-    const sourceGroup = msg.key.remoteJid;
-    const messageTimestamp = msg.messageTimestamp; // seconds (Baileys native)
-    const messageTimestampMs = messageTimestamp * 1000;
+  const msgId = msg.key.id;
+  const sourceGroup = msg.key.remoteJid;
+  const messageTimestamp = msg.messageTimestamp; // seconds (Baileys native)
+  const messageTimestampMs = messageTimestamp * 1000;
 
-    // ── B1: Reconnect age gate ──
-    // For the first 30s after a reconnect, only accept messages < 10s old.
-    // This prevents the replay flood that Baileys fires on reconnect.
-    const timeSinceReconnect = Date.now() - lastReconnectTime;
-    if (
-      lastReconnectTime > 0 &&
-      timeSinceReconnect < RECONNECT.STRICT_WINDOW_DURATION
-    ) {
-      const messageAge = Date.now() - messageTimestampMs;
-      if (messageAge > RECONNECT.STRICT_AGE_MS) {
-        stats.rejectedByReconnectAgeGate++;
-        return; // silently drop — this is a replay
-      }
-    }
-
-    // ── B2: Replay ID check ──
-    if (replayIdSet.has(msgId)) {
-      stats.replayIdsSkipped++;
-      return;
-    }
-    trackReplayId(msgId);
-
-    // ── Extract text ──
-    const text =
-      msg.message?.conversation ||
-      msg.message?.extendedTextMessage?.text ||
-      msg.message?.imageMessage?.caption ||
-      msg.message?.videoMessage?.caption ||
-      "";
-
-    if (!text || text.trim() === "") {
-      stats.rejectedEmptyBody++;
-      return;
-    }
-
-    // ── Bot self-send check (phone-level, not just fromMe) ──
-    // Preserved from original: checks both group sender and participant fields
-    const senderPhone = sourceGroup.split("@")[0] || "";
-    const participantPhone = (msg.key.participant || "").split("@")[0] || "";
-
-    if (
-      normalizePhone(senderPhone) === normalizePhone(config.botPhone) ||
-      normalizePhone(participantPhone) === normalizePhone(config.botPhone)
-    ) {
-      stats.rejectedBotSender++;
-      log.info("🤖 Bot own sender — skipped");
-      return;
-    }
-
-    // ── Min length check ──
-    if (text.length < MESSAGE.MIN_LENGTH) {
-      stats.rejectedTooShort++;
-      return;
-    }
-
-    // ── A4: Settling delay — one-time pause after connect/reconnect ──
-    if (needsSettlingDelay) {
-      needsSettlingDelay = false;
-      const settleDuration =
-        RECONNECT.SETTLING_MIN +
-        Math.floor(
-          Math.random() * (RECONNECT.SETTLING_MAX - RECONNECT.SETTLING_MIN),
-        );
-      log.info(
-        `⏳ Settling delay: ${(settleDuration / 1000).toFixed(1)}s (first message after connect)`,
-      );
-      await new Promise((r) => setTimeout(r, settleDuration));
-    }
-
-    // ── Circuit breaker gate ──
-    if (circuitBreaker.isOpen) {
-      log.warn("🔴 Circuit breaker OPEN — message dropped");
-      return;
-    }
-
-    // ── Path detection FIRST ──
-    const isPathA = config.sourceGroupIds.includes(sourceGroup);
-    const isPathB = sourceGroup === config.freeCommonGroupId;
-
-    // 🚫 If not monitored, EXIT EARLY — no fingerprinting
-    if (!isPathA && !isPathB) {
-      stats.rejectedNotMonitored++;
-      log.warn("🚫 Unmonitored group — skipped");
-      return;
-    }
-
-    // ── Fingerprint dedup (ONLY for monitored groups) ──
-    const fingerprint = getMessageFingerprint(text, null, messageTimestampMs);
-
-    if (fingerprintSet.has(fingerprint)) {
-      stats.duplicatesSkipped++;
-      log.info("🔁 Duplicate fingerprint — skipped");
-      return;
-    }
-
-    // Add fingerprint ONLY now
-    fingerprintSet.add(fingerprint);
-    markDirty();
-
-    // ── Logging ──
-    log.info(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    log.info(
-      `📥 MSG #${stats.totalMessagesSent} | ${isPathA ? "PATH A" : "PATH B"}`,
-    );
-    log.info(`   From: ${sourceGroup.substring(0, 20)}...`);
-    log.info(
-      `   Text: "${text.substring(0, 60)}${text.length > 60 ? "..." : ""}"`,
-    );
-    log.info(`   Fingerprint: ${fingerprint}`);
-
-    const ctx = buildRouterContext();
-
-    if (isPathA) {
-      await processPathA(text, sourceGroup, fingerprint, ctx);
-    } else {
-      await processPathB(text, sourceGroup, fingerprint, ctx);
+  // ── B1: Reconnect age gate ──
+  // For the first 30s after a reconnect, only accept messages < 10s old.
+  // This prevents the replay flood that Baileys fires on reconnect.
+  const timeSinceReconnect = Date.now() - lastReconnectTime;
+  if (
+    lastReconnectTime > 0 &&
+    timeSinceReconnect < RECONNECT.STRICT_WINDOW_DURATION
+  ) {
+    const messageAge = Date.now() - messageTimestampMs;
+    if (messageAge > RECONNECT.STRICT_AGE_MS) {
+      stats.rejectedByReconnectAgeGate++;
+      return; // silently drop — this is a replay
     }
   }
+
+  // ── B2: Replay ID check ──
+  if (replayIdSet.has(msgId)) {
+    stats.replayIdsSkipped++;
+    return;
+  }
+
+  // ── Extract text ──
+  const text =
+    msg.message?.conversation ||
+    msg.message?.extendedTextMessage?.text ||
+    msg.message?.imageMessage?.caption ||
+    msg.message?.videoMessage?.caption ||
+    "";
+
+  if (!text || text.trim() === "") {
+    stats.rejectedEmptyBody++;
+    return;
+  }
+
+  // ── Bot self-send check (phone-level, not just fromMe) ──
+  const senderPhone = sourceGroup.split("@")[0] || "";
+  const participantPhone = (msg.key.participant || "").split("@")[0] || "";
+
+  if (
+    normalizePhone(senderPhone) === normalizePhone(config.botPhone) ||
+    normalizePhone(participantPhone) === normalizePhone(config.botPhone)
+  ) {
+    stats.rejectedBotSender++;
+    log.info("🤖 Bot own sender — skipped");
+    return;
+  }
+
+  // ── Min length check ──
+  if (text.length < MESSAGE.MIN_LENGTH) {
+    stats.rejectedTooShort++;
+    return;
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 🔒 CRITICAL: Path detection MUST happen BEFORE fingerprinting
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const isPathA = config.sourceGroupIds.includes(sourceGroup);
+  const isPathB = sourceGroup === config.freeCommonGroupId;
+
+  // 🚫 REQUIREMENT #1: If NOT monitored, exit IMMEDIATELY. No fingerprint.
+  if (!isPathA && !isPathB) {
+    stats.rejectedNotMonitored++;
+    log.warn("🚫 Unmonitored group — skipped");
+    return;
+  }
+  trackReplayId(msgId);
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 🔒 FINGERPRINT MUTEX — ONLY for monitored groups, BEFORE any async work
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // REQUIREMENT #4: No raw timestamps. Use 5-minute buckets.
+  const timeBucket = Math.floor(messageTimestampMs / (5 * 60 * 1000));
+  const fingerprint = getMessageFingerprint(text, null, timeBucket);
+
+
+  // REQUIREMENT #5: Dedup acts as mutex — check-and-set must be atomic
+  if (fingerprintSet.has(fingerprint)) {
+    stats.duplicatesSkipped++;
+    log.info("🔁 Duplicate fingerprint — skipped");
+    return;
+  }
+
+  // REQUIREMENT #3: Add fingerprint NOW, before ANY async operation
+  // This prevents race conditions during reconnect bursts
+  fingerprintSet.add(fingerprint);
+  markDirty();
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // At this point: message is monitored AND fingerprint is locked.
+  // It's safe to proceed with async operations and routing.
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  // ── A4: Settling delay — one-time pause after connect/reconnect ──
+  if (needsSettlingDelay) {
+    needsSettlingDelay = false;
+    const settleDuration =
+      RECONNECT.SETTLING_MIN +
+      Math.floor(
+        Math.random() * (RECONNECT.SETTLING_MAX - RECONNECT.SETTLING_MIN),
+      );
+    log.info(
+      `⏳ Settling delay: ${(settleDuration / 1000).toFixed(1)}s (first message after connect)`,
+    );
+    await new Promise((r) => setTimeout(r, settleDuration));
+  }
+
+  // ── Circuit breaker gate ──
+  if (circuitBreaker.isOpen) {
+  fingerprintSet.delete(fingerprint);
+  log.warn("🔴 Circuit breaker OPEN — message dropped (fingerprint released)");
+  return;
+}
+
+
+  // ── Logging ──
+  log.info(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  log.info(
+    `📥 INCOMING MESSAGE #${stats.totalMessagesSent} | ${isPathA ? "PATH A" : "PATH B"}`,
+  );
+  log.info(`   From: ${sourceGroup.substring(0, 20)}...`);
+  log.info(
+    `   Text: "${text.substring(0, 60)}${text.length > 60 ? "..." : ""}"`,
+  );
+  log.info(`   Fingerprint: ${fingerprint}`);
+
+  const ctx = buildRouterContext();
+
+  if (isPathA) {
+    await processPathA(text, sourceGroup, fingerprint, ctx);
+  } else {
+    await processPathB(text, sourceGroup, fingerprint, ctx);
+  }
+}
 
   // ---------------------------------------------------------------------------
   // BAILEYS CONNECTION
@@ -369,12 +384,25 @@ export async function startBot(config, log, authDir) {
       );
 
       const baileysLogger = pino({
-        level: "warn", // suppress Baileys' own verbose info/debug
-        transport: {
-          target: "pino-pretty",
-          options: { translateTime: true, colorize: true },
-        },
-      });
+  level: "warn",
+  hooks: {
+    logMethod(inputArgs, method) {
+      const msg = inputArgs[0];
+      if (
+        typeof msg === "string" &&
+        (
+          msg.includes("closing session") ||
+          msg.includes("decrypt") ||
+          msg.includes("bad mac") ||
+          msg.includes("failed to decrypt")
+        )
+      ) {
+        return;
+      }
+      method.apply(this, inputArgs);
+    }
+  }
+});
 
       sock = makeWASocket({
         version,
@@ -568,25 +596,115 @@ export async function startBot(config, log, authDir) {
       });
     });
 
-    // /groups — lists all groups this bot is a member of (useful for config setup)
-    app.get("/groups", async (_, res) => {
-      if (!sock) return res.status(503).json({ error: "Not connected" });
-      try {
-        const groupChats = await sock.groupFetchAllParticipating();
-        const groups = Object.values(groupChats).map((chat) => ({
-          id: chat.id,
-          name: chat.subject || "Unknown",
-          participants: chat.participants?.length || 0,
-        }));
-        res.json({ bot: config.botId, count: groups.length, groups });
-      } catch (err) {
-        res.status(500).json({ error: err.message });
+    // /groups — lists all groups this bot is a member of with monitoring classification
+app.get("/groups", async (_, res) => {
+  if (!sock) {
+    return res.status(503).json({ error: "WhatsApp not connected" });
+  }
+
+  try {
+    const groupChats = await sock.groupFetchAllParticipating();
+    const allGroups = Object.values(groupChats).map((chat) => ({
+      id: chat.id,
+      name: chat.subject || "Unknown",
+      participantsCount: chat.participants?.length || 0,
+    }));
+
+    // ------------------------------------------------------------------
+    // Build monitored group sets
+    // ------------------------------------------------------------------
+
+    const sourceSet = new Set(config.sourceGroupIds);
+
+    const paidSet = new Set(
+      Array.isArray(config.paidCommonGroupId)
+        ? config.paidCommonGroupId
+        : [config.paidCommonGroupId]
+    );
+
+    const citySet = new Set(Object.values(config.cityTargetGroups || {}));
+
+    const freeSet = new Set(
+      config.freeCommonGroupId ? [config.freeCommonGroupId] : []
+    );
+
+    // ------------------------------------------------------------------
+    // Categorize groups
+    // ------------------------------------------------------------------
+
+    const categorized = allGroups.map((g) => {
+      let type = "other";
+      let category = "Unmonitored";
+
+      if (sourceSet.has(g.id)) {
+        type = "source";
+        category = "Source Group";
+      } else if (paidSet.has(g.id)) {
+        type = "paid";
+        category = "Paid Group";
+      } else if (citySet.has(g.id)) {
+        const cityName = Object.keys(config.cityTargetGroups).find(
+          (city) => config.cityTargetGroups[city] === g.id
+        );
+        type = "city";
+        category = `City Group${cityName ? `: ${cityName}` : ""}`;
+      } else if (freeSet.has(g.id)) {
+        type = "free_common";
+        category = "Free Common Group";
       }
+
+      return { ...g, type, category };
     });
 
-    app.listen(statsPort, () => {
-      log.info(`📊 Stats server: http://localhost:${statsPort}/stats`);
+    // ------------------------------------------------------------------
+    // Sort by monitoring priority
+    // ------------------------------------------------------------------
+
+    const sortOrder = {
+      source: 1,
+      free_common: 2,
+      paid: 3,
+      city: 4,
+      other: 5,
+    };
+
+    categorized.sort((a, b) => {
+      const orderA = sortOrder[a.type] || 99;
+      const orderB = sortOrder[b.type] || 99;
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.name || "").localeCompare(b.name || "");
     });
+
+    // ------------------------------------------------------------------
+    // Response
+    // ------------------------------------------------------------------
+
+    res.json({
+      success: true,
+      bot: config.botId,
+      connectedAs: sock.user?.id || "Unknown",
+      totalGroups: categorized.length,
+      breakdown: {
+        source: categorized.filter((g) => g.type === "source").length,
+        freeCommon: categorized.filter((g) => g.type === "free_common").length,
+        paid: categorized.filter((g) => g.type === "paid").length,
+        city: categorized.filter((g) => g.type === "city").length,
+        unmonitored: categorized.filter((g) => g.type === "other").length,
+      },
+      groups: categorized,
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+    app.listen(statsPort, "0.0.0.0", () => {
+  log.info(`📊 Stats server: http://0.0.0.0:${statsPort}/stats`);
+});
   }
 
   // ---------------------------------------------------------------------------

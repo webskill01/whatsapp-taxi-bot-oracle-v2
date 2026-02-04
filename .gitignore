@@ -6,10 +6,6 @@ logs/
 *.log
 npm-debug.log*
 
-# Environment
-.env
-.env.local
-.env.production
 
 # WhatsApp Session (will re-authenticate on Oracle)
 .wwebjs_auth/
