@@ -45,16 +45,41 @@ module.exports = {
       out_file:   '../../logs/bot-admin-out.log',
       merge_logs: true,
     },
+    
+    // =========================================================================
+    // bot-taxi
+    // =========================================================================
+    {
+      name:   'bot-taxi',
+      script: './start.js',                        // relative to cwd below
+      cwd:    './bots/bot-taxi',                  // PM2 resolves this from where you run "pm2 start"
 
-    // =========================================================================
-    // bot-taxi  ← ADD LATER.  Copy the block above and change:
-    //   name:       'bot-taxi'
-    //   cwd:        './bots/bot-taxi'
-    //   error_file: '../../logs/bot-taxi-error.log'
-    //   out_file:   '../../logs/bot-taxi-out.log'
-    // Then create bots/bot-taxi/ with its own start.js (.env STATS_PORT=3011)
-    // and config.json, delete baileys_auth/ if copied, and run:
-    //   pm2 restart ecosystem.config.cjs
-    // =========================================================================
+      instances:  1,
+      exec_mode:  'fork',                          // one process per bot, no cluster
+
+      // ── restart policy ──
+      autorestart:   true,
+      watch:         false,
+      restart_delay: 5000,                         // 5s cooldown between restarts
+      min_uptime:    '15s',                        // must stay up 15s or it counts as a crash
+      max_restarts:  10,
+
+      // ── memory ──
+      max_memory_restart: '400M',
+      env: {
+        NODE_OPTIONS: '--max-old-space-size=384',
+      },
+
+      // ── graceful shutdown ──
+      kill_timeout:            10000,              // 10s for SIGTERM handler to flush + close socket
+      shutdown_with_message:   true,
+
+      // ── logging ──
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      error_file: '../../logs/bot-taxi-error.log',   // relative to cwd
+      out_file:   '../../logs/bot-taxi-out.log',
+      merge_logs: true,
+    },
+   
   ]
 };

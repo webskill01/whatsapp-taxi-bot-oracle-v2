@@ -1,7 +1,7 @@
 {
   "_comment": "Per-bot config. Only fields that differ between bot instances. Keywords, ignore list, and blocked numbers are in core/globalConfig.json.",
 
-  "botPhone": "919464180617",
+  "botPhone": "919464177279",
 
   "sourceGroupIds": [
     "120363406504174656@g.us",
