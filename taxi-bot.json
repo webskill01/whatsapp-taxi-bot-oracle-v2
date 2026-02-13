@@ -1,0 +1,743 @@
+﻿{
+"success": true,
+"bot": "bot-taxi",
+"connectedAs": "919464177279:23@s.whatsapp.net",
+"totalGroups": 104,
+"breakdown": {
+"source": 82,
+"freeCommon": 1,
+"paid": 2,
+"city": 11,
+"unmonitored": 8
+},
+"groups": [
+{
+"id": "120363405892106932@g.us",
+"name": "✈️💫Mehra Airline 💫✈️",
+"participantsCount": 869,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363422674693598@g.us",
+"name": "✈️5911 TRAVEL CHANDIGARH AIRPORT✈️",
+"participantsCount": 640,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363421051152820@g.us",
+"name": "✈️ਕੰਮ ਨੀ 🚀ਰੁਕਣ ਦੇਣਾ ARVAAN🚀AIRLINE 🦅 ਪਟਿਆਲਾ 🐎",
+"participantsCount": 615,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363404291666549@g.us",
+"name": "👉💫DROP OFF CABS 💫👈🤝",
+"participantsCount": 920,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363404720772603@g.us",
+"name": "👑KING PATIALA PICK DROP👑",
+"participantsCount": 747,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363022546179903@g.us",
+"name": "🔱🛕🔱 हर हर महादेव 🕉️ Patiala to All side",
+"participantsCount": 943,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363221201669049@g.us",
+"name": "🕉️ VK  Travels Patiala ✈️🚘.",
+"participantsCount": 509,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363265886142830@g.us",
+"name": "🧿🧿 Roadways Di Larri 🧿🧿",
+"participantsCount": 499,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363406504174656@g.us",
+"name": "🙏Fateh  Airlines Rajpura 9100🙏",
+"participantsCount": 183,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363404540042494@g.us",
+"name": "🚔 ਤੇਰੀ ਓਟ  travel Sangrur  Maan🚔",
+"participantsCount": 444,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363405377444620@g.us",
+"name": "🚖jalandhar dehli pathankot dalhousie roadline taxi service🚖",
+"participantsCount": 768,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363423835554521@g.us",
+"name": "🚖SHIMLA TOUR & TRAVEL 🚖  ✈️(SAGAR AIRLINE)✈️",
+"participantsCount": 592,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "917410880498-1511444567@g.us",
+"name": "🚖Waheguru Ji  Travels PB22❣️🤟🏻",
+"participantsCount": 852,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363420917001793@g.us",
+"name": "🚗 AKTA Travels Sirsa 🚘 (Drop & Sharing Any where)",
+"participantsCount": 530,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363426142026355@g.us",
+"name": "🚗🚗FATEH &LADDI TOUR Travels SIRHIND 🚗",
+"participantsCount": 584,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363368704255596@g.us",
+"name": "🚘Ekta Tours & Travels   🚕",
+"participantsCount": 659,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "919517170173-1617461667@g.us",
+"name": "🚘Patiala Chandigarh Amritsar Delhi ✈️✈️",
+"participantsCount": 898,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363384734216232@g.us",
+"name": "0 Km Panjab To Lahore only Duty",
+"participantsCount": 512,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363302626877539@g.us",
+"name": "AaravCabService.JLD✈️",
+"participantsCount": 422,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363399678225714@g.us",
+"name": "Abhi Travels Rampura 🚘🚘🚘",
+"participantsCount": 985,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363423374345039@g.us",
+"name": "Aman tour and travel @ Sharma @ Chandigarh",
+"participantsCount": 286,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363402438690557@g.us",
+"name": "Brar Travel✈️️ 5911 😊 Bathinda",
+"participantsCount": 943,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363416914429922@g.us",
+"name": "BROTHER HOOD, CHANDIGARH ",
+"participantsCount": 504,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363375447932489@g.us",
+"name": "Brotherhood group 🧳🧳🚕🚕 all India tourist 🚕🚕 advance payment not allowed 🙏🙏 driver ekta zindabad ❤️❤️",
+"participantsCount": 855,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363423226723563@g.us",
+"name": "Brothers tour nd travel kharar mohali (KHARAR BUS STAND)",
+"participantsCount": 669,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363421257606611@g.us",
+"name": "Chandigarh Airport one way duty only",
+"participantsCount": 585,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363419472843883@g.us",
+"name": "Day Night Cab's Service 24 Hrs 🫥",
+"participantsCount": 816,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363187068243304@g.us",
+"name": "Deep tour and travel Zirkpur",
+"participantsCount": 270,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363407642248505@g.us",
+"name": "Deep&Travels🚖🚖",
+"participantsCount": 183,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363417192609248@g.us",
+"name": "Ekam trevel online duty, zirakpur, chandigarh, khanna all india so please only duty 🙏",
+"participantsCount": 890,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363418904265736@g.us",
+"name": "Fateh travels",
+"participantsCount": 730,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363074588429278@g.us",
+"name": "Fatehz Transport",
+"participantsCount": 816,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363404930720112@g.us",
+"name": "First Ride Tour &Travels Mohali",
+"participantsCount": 646,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363404442544384@g.us",
+"name": "Hadimba Tour Travels",
+"participantsCount": 356,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363404567421312@g.us",
+"name": "HR⚡6️⃣4️⃣✈️ Airlines 🚀",
+"participantsCount": 723,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363423646907700@g.us",
+"name": "KAINAAT TRAVELS🚗BARNALA",
+"participantsCount": 975,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363373225645816@g.us",
+"name": "LADDI TRAVELLER RAJPURA 0648",
+"participantsCount": 994,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363424068422833@g.us",
+"name": "LOVEX AIRLINES ZIRAKPUR",
+"participantsCount": 916,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363425403734201@g.us",
+"name": "Lucky tour and travel all India permit in 24 hour himachal pradesh",
+"participantsCount": 940,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363425171427400@g.us",
+"name": "Maan 2  Sangrur mauran all India tourist",
+"participantsCount": 440,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363420730861658@g.us",
+"name": "Mahakal tour & travel✈️✈️✈️✈️",
+"participantsCount": 393,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363407752300512@g.us",
+"name": "Mathura Vrindavan tour and travels",
+"participantsCount": 594,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363412746124626@g.us",
+"name": "Mehar Airline cabs Ludhiana ✈️✈️✈️✈️✈️✈️✈️",
+"participantsCount": 356,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363027123676514@g.us",
+"name": "NAAM JAPO TOUR & TRAVELS",
+"participantsCount": 982,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363402190151036@g.us",
+"name": "Nabha.. patiala.. Ludhiana.",
+"participantsCount": 970,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363422687503418@g.us",
+"name": "Non stop duties",
+"participantsCount": 360,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "918437625300-1616906216@g.us",
+"name": "Omkar Tour & Travel Patiala 11",
+"participantsCount": 948,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363040719967068@g.us",
+"name": "Omkar Travels Patiala 1",
+"participantsCount": 661,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363406382326537@g.us",
+"name": "One way duty group 24/7 hr ludhiana",
+"participantsCount": 983,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363406978900165@g.us",
+"name": "Only duty gurup all india",
+"participantsCount": 397,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363141748741136@g.us",
+"name": "Patiala one way taxi service.🚗",
+"participantsCount": 968,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363143594375749@g.us",
+"name": "Patiala to Delhi Drop Only duty group",
+"participantsCount": 833,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363376718831997@g.us",
+"name": "PB 36 GHUMAN PHAGWARA ✈️✈️",
+"participantsCount": 696,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363199666797438@g.us",
+"name": "PB-02 PRINCE CAB SERVICE [AMRITSAR] 24/7",
+"participantsCount": 271,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363167706147786@g.us",
+"name": "PB11patiala wale",
+"participantsCount": 917,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363047262831530@g.us",
+"name": "PB39airline  JAGJEET SINGH",
+"participantsCount": 384,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363356870047820@g.us",
+"name": "Pick & Drop Delhi. Rohtak .Gohana .Sonepat",
+"participantsCount": 420,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363422491621898@g.us",
+"name": "Pooja Travel.🇳🇵🇳🇵 Amritsar.🇳🇵🌎✈️",
+"participantsCount": 600,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363405418780751@g.us",
+"name": "Punia Travel Bhagal haryana",
+"participantsCount": 990,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363402355126149@g.us",
+"name": "Punjab airline✈️ Gidderbaha🤝",
+"participantsCount": 836,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363021229826491@g.us",
+"name": "Ran 🛣️🛣️🛣️ Way Taxi  Patiala",
+"participantsCount": 632,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363404844401746@g.us",
+"name": "RC Travels Bathinda",
+"participantsCount": 722,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363423359254758@g.us",
+"name": "SARDANA CAB SERVICE",
+"participantsCount": 584,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363403077142984@g.us",
+"name": "SEHAJ AIRLINES ✈️",
+"participantsCount": 833,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363244492987417@g.us",
+"name": "Shahar Patiala Taxi service",
+"participantsCount": 942,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363403424702580@g.us",
+"name": "𝙎𝙃𝙍𝙀𝙀 𝙎𝙃𝙔𝘼𝙈 𝙏𝙊𝙐𝙍 & 𝙏𝙍𝘼𝙑𝙀𝙇𝙎 𝙅𝘼𝙄𝙋𝙐𝙍",
+"participantsCount": 923,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363424143993029@g.us",
+"name": "SHUKHRANA DUTY GROUP",
+"participantsCount": 674,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363423339030924@g.us",
+"name": "Simran Tour And Travels🚘🚙🚖🚕🚗",
+"participantsCount": 765,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363424492381509@g.us",
+"name": "Singh Tour and travel",
+"participantsCount": 394,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363040272941284@g.us",
+"name": "SONU TOUR & TRAVEL HIMACHAL PRADESH",
+"participantsCount": 749,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363406529407717@g.us",
+"name": "Sukhraj travel new chandigarh",
+"participantsCount": 772,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363422103385501@g.us",
+"name": "Transport Vendor Group",
+"participantsCount": 881,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363047912621678@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "919896561610-1635681472@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363022863190599@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363316196736233@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363282120996996@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363422865913366@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363421754705030@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363401201152391@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363413089196511@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363419884290817@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "source",
+"category": "Source Group"
+},
+{
+"id": "120363423042952422@g.us",
+"name": "PUNJAB TAXI",
+"participantsCount": 310,
+"type": "free_common",
+"category": "Free Common Group"
+},
+{
+"id": "120363422627467141@g.us",
+"name": "12.ALL AREA DUTY  (Punjab Taxi Group)",
+"participantsCount": 312,
+"type": "paid",
+"category": "Paid Group"
+},
+{
+"id": "120363407001665784@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "paid",
+"category": "Paid Group"
+},
+{
+"id": "120363423482434246@g.us",
+"name": "1.DELHI ONLY (Punjab Taxi Group)",
+"participantsCount": 305,
+"type": "city",
+"category": "City Group: Delhi"
+},
+{
+"id": "120363404132182917@g.us",
+"name": "10.NOIDA ONLY ( Punjab Taxi Group)",
+"participantsCount": 283,
+"type": "city",
+"category": "City Group: Noida"
+},
+{
+"id": "120363406228877039@g.us",
+"name": "11.GURGAON ONLY (Punjab Taxi Service)",
+"participantsCount": 280,
+"type": "city",
+"category": "City Group: Gurgaon"
+},
+{
+"id": "120363406216444790@g.us",
+"name": "2.CHANDIGARH ONLY (Punjab Taxi Group)",
+"participantsCount": 309,
+"type": "city",
+"category": "City Group: Chandigarh"
+},
+{
+"id": "120363420990654823@g.us",
+"name": "3.MOHALI ONLY (Punjab Taxi Group)",
+"participantsCount": 300,
+"type": "city",
+"category": "City Group: Mohali"
+},
+{
+"id": "120363422444161150@g.us",
+"name": "4.AMRITSAR ONLY (Punjab Taxi Group)",
+"participantsCount": 310,
+"type": "city",
+"category": "City Group: Amritsar"
+},
+{
+"id": "120363403520075306@g.us",
+"name": "5.PATIALA ONLY (Punjab Taxi Group)",
+"participantsCount": 301,
+"type": "city",
+"category": "City Group: Patiala"
+},
+{
+"id": "120363422959715688@g.us",
+"name": "6.LUDHIANA ONLY (Punjab Taxi Group)",
+"participantsCount": 304,
+"type": "city",
+"category": "City Group: Ludhiana"
+},
+{
+"id": "120363403650334256@g.us",
+"name": "7.JALANDHAR DUTY (Punjab Taxi Group)",
+"participantsCount": 296,
+"type": "city",
+"category": "City Group: Jalandhar"
+},
+{
+"id": "120363422601115995@g.us",
+"name": "8.AMBALA ONLY (Punjab Taxi Group)",
+"participantsCount": 294,
+"type": "city",
+"category": "City Group: Ambala"
+},
+{
+"id": "120363422636858624@g.us",
+"name": "9.ZIRAKPUR ONLY (Punjab Taxi Group)",
+"participantsCount": 293,
+"type": "city",
+"category": "City Group: Zirakpur"
+},
+{
+"id": "120363423935655589@g.us",
+"name": "🚕Chad di Kala ji 🚕 Travel 🚕 🚕Ludhiana🚕",
+"participantsCount": 531,
+"type": "other",
+"category": "Unmonitored"
+},
+{
+"id": "120363406319827484@g.us",
+"name": "🚘🚀VIP CABS LUDHIANA",
+"participantsCount": 102,
+"type": "other",
+"category": "Unmonitored"
+},
+{
+"id": "120363038862195315@g.us",
+"name": "🚘Thind Tour & Travels🚖 All India pick🚖 & Drop Service🚖",
+"participantsCount": 578,
+"type": "other",
+"category": "Unmonitored"
+},
+{
+"id": "120363407982159189@g.us",
+"name": "Malwa Travels All Punjab Duty Group",
+"participantsCount": 3,
+"type": "other",
+"category": "Unmonitored"
+},
+{
+"id": "120363406302662198@g.us",
+"name": "Malwa Travels Chandigarh/Mohali/Zirakpur Duty",
+"participantsCount": 3,
+"type": "other",
+"category": "Unmonitored"
+},
+{
+"id": "120363408598698876@g.us",
+"name": "Malwa Travels LDH/Amrtisar/Patiala Duty Group",
+"participantsCount": 3,
+"type": "other",
+"category": "Unmonitored"
+},
+{
+"id": "120363423607638225@g.us",
+"name": "Mandyal tour and travels Duty Group ❤️✈️",
+"participantsCount": 404,
+"type": "other",
+"category": "Unmonitored"
+},
+{
+"id": "120363407411290224@g.us",
+"name": "Unknown",
+"participantsCount": 0,
+"type": "other",
+"category": "Unmonitored"
+}
+]
+}
