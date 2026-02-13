@@ -5,6 +5,10 @@
 //
 // NOTHING HERE changes what a "valid ride" is. That decision is made in filter.js
 // before this file is ever called.
+//
+// FINGERPRINT FIX:
+// ✅ Returns true/false to indicate if message was successfully processed
+// ✅ Fingerprint only saved if return value is true
 // =============================================================================
 
 import {
@@ -291,6 +295,7 @@ async function sendToMultipleGroupsSequential(targets, text, ctx) {
 
 // -----------------------------------------------------------------------------
 // PATH A — Source Groups → Paid + City + Free
+// ✅ NOW RETURNS: true if succeeded (sent messages), false if rejected
 // -----------------------------------------------------------------------------
 // Target build order: paid → city → free (locked change)
 // Then shuffled (A3) before sending.
@@ -304,27 +309,27 @@ export async function processPathA(text, sourceGroup, fingerprint, ctx) {
   if (containsBlockedNumber(text, ctx.config.blockedPhoneNumbers)) {
     ctx.stats.rejectedBlockedNumber++;
     ctx.log.info('🚫 BLOCKED NUMBER — rejected');
-    return;
+    return false;
   }
 
   // Gate 2: Is taxi request?
   if (!isTaxiRequest(text, ctx.config.requestKeywords, ctx.config.ignoreIfContains, [])) {
     ctx.stats.rejectedNotTaxi++;
     ctx.log.info('⛔ NOT TAXI — rejected');
-    return;
+    return false;
   }
 
   // Gate 3: Has phone number?
   if (!hasPhoneNumber(text)) {
     ctx.stats.rejectedNoPhone++;
     ctx.log.info('📵 NO PHONE — rejected');
-    return;
+    return false;
   }
 
   // Gate 4: Rate limit
   if (!checkRateLimit(ctx)) {
     ctx.stats.rejectedRateLimit++;
-    return;
+    return false;
   }
 
   // ── Build target list: paid → city → free ──
@@ -360,8 +365,8 @@ export async function processPathA(text, sourceGroup, fingerprint, ctx) {
 
   ctx.log.info(`🎯 PATH A targets: ${uniqueTargets.length} (paid=${Array.isArray(ctx.config.paidCommonGroupId) ? ctx.config.paidCommonGroupId.length : 1}, city=${firstCity || 'none'}, free=1)`);
 
-  // NOTE: fingerprint add + markDirty is done by index.js BEFORE this function
-  // is called. Do NOT duplicate it here.
+  // NOTE: fingerprint add + markDirty is done by index.js AFTER this function
+  // returns true. Do NOT duplicate it here.
 
   // Send
   const { successCount, totalTargets } = await sendToMultipleGroupsSequential(uniqueTargets, text, ctx);
@@ -377,10 +382,13 @@ export async function processPathA(text, sourceGroup, fingerprint, ctx) {
 
   // C1: Batch cleanup if fingerprint set exceeds cap
   cleanupFingerprintSetIfNeeded(ctx);
+
+  return successCount > 0;
 }
 
 // -----------------------------------------------------------------------------
 // PATH B — Free Common → Paid + City
+// ✅ NOW RETURNS: true if succeeded (sent messages), false if rejected
 // -----------------------------------------------------------------------------
 // Target build order: paid → city (free is the SOURCE, not a target here)
 // Then shuffled (A3) before sending.
@@ -394,27 +402,27 @@ export async function processPathB(text, sourceGroup, fingerprint, ctx) {
   if (containsBlockedNumber(text, ctx.config.blockedPhoneNumbers)) {
     ctx.stats.rejectedBlockedNumber++;
     ctx.log.info('🚫 BLOCKED NUMBER — rejected');
-    return;
+    return false;
   }
 
   // Gate 2: Is taxi request?
   if (!isTaxiRequest(text, ctx.config.requestKeywords, ctx.config.ignoreIfContains, [])) {
     ctx.stats.rejectedNotTaxi++;
     ctx.log.info('⛔ NOT TAXI — rejected');
-    return;
+    return false;
   }
 
   // Gate 3: Has phone number?
   if (!hasPhoneNumber(text)) {
     ctx.stats.rejectedNoPhone++;
     ctx.log.info('📵 NO PHONE — rejected');
-    return;
+    return false;
   }
 
   // Gate 4: Rate limit
   if (!checkRateLimit(ctx)) {
     ctx.stats.rejectedRateLimit++;
-    return;
+    return false;
   }
 
   // ── Build target list: paid → city ──
@@ -447,8 +455,8 @@ export async function processPathB(text, sourceGroup, fingerprint, ctx) {
 
   ctx.log.info(`🎯 PATH B targets: ${uniqueTargets.length} (paid=${Array.isArray(ctx.config.paidCommonGroupId) ? ctx.config.paidCommonGroupId.length : 1}, city=${firstCity || 'none'})`);
 
-  // NOTE: fingerprint add + markDirty is done by index.js BEFORE this function
-  // is called. Do NOT duplicate it here.
+  // NOTE: fingerprint add + markDirty is done by index.js AFTER this function
+  // returns true. Do NOT duplicate it here.
 
   // Send
   const { successCount, totalTargets } = await sendToMultipleGroupsSequential(uniqueTargets, text, ctx);
@@ -464,4 +472,6 @@ export async function processPathB(text, sourceGroup, fingerprint, ctx) {
 
   // C1: Batch cleanup if fingerprint set exceeds cap
   cleanupFingerprintSetIfNeeded(ctx);
+
+  return successCount > 0;
 }

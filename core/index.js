@@ -114,9 +114,9 @@ export async function startBot(config, log, authDir) {
 
   const BOT_START_TIME = Date.now();
 
-  // Fingerprint file path — lives in the bot's own directory (passed via config or derived)
-  // We use process.cwd() which PM2 sets to the bot folder via the ecosystem config
-  const FINGERPRINT_FILE = path.join(process.cwd(), CACHE.FINGERPRINT_FILE);
+  // ✅ FIX #2: Per-bot fingerprint file (uses botPhone for uniqueness)
+  const BOT_FINGERPRINT_FILENAME = `fingerprints_${config.botPhone?.replace(/\D/g, "") || config.botId || "default"}.json`;
+  const FINGERPRINT_FILE = path.join(process.cwd(), BOT_FINGERPRINT_FILENAME);
 
   // ---------------------------------------------------------------------------
   // FINGERPRINT DISK PERSISTENCE (C2 debounced)
@@ -304,29 +304,19 @@ export async function startBot(config, log, authDir) {
   trackReplayId(msgId);
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // 🔒 FINGERPRINT MUTEX — ONLY for monitored groups, BEFORE any async work
+  // ⚠️ MOVED: Fingerprint check happens HERE, but NOT added yet
+  // We check for duplicate, but only add AFTER validation succeeds
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // REQUIREMENT #4: No raw timestamps. Use 5-minute buckets.
   const timeBucket = Math.floor(messageTimestampMs / (5 * 60 * 1000));
   const fingerprint = getMessageFingerprint(text, null, timeBucket);
 
-
-  // REQUIREMENT #5: Dedup acts as mutex — check-and-set must be atomic
+  // Early duplicate check (before validation)
   if (fingerprintSet.has(fingerprint)) {
     stats.duplicatesSkipped++;
     log.info("🔁 Duplicate fingerprint — skipped");
     return;
   }
-
-  // REQUIREMENT #3: Add fingerprint NOW, before ANY async operation
-  // This prevents race conditions during reconnect bursts
-  fingerprintSet.add(fingerprint);
-  markDirty();
-
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // At this point: message is monitored AND fingerprint is locked.
-  // It's safe to proceed with async operations and routing.
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   // ── A4: Settling delay — one-time pause after connect/reconnect ──
   if (needsSettlingDelay) {
@@ -344,11 +334,9 @@ export async function startBot(config, log, authDir) {
 
   // ── Circuit breaker gate ──
   if (circuitBreaker.isOpen) {
-  fingerprintSet.delete(fingerprint);
-  log.warn("🔴 Circuit breaker OPEN — message dropped (fingerprint released)");
-  return;
-}
-
+    log.warn("🔴 Circuit breaker OPEN — message dropped");
+    return;
+  }
 
   // ── Logging ──
   log.info(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -363,10 +351,20 @@ export async function startBot(config, log, authDir) {
 
   const ctx = buildRouterContext();
 
+  // ✅ FIX #1: Process path (with validation inside router)
+  // Only AFTER processing succeeds do we add fingerprint
+  let pathSucceeded = false;
+
   if (isPathA) {
-    await processPathA(text, sourceGroup, fingerprint, ctx);
+    pathSucceeded = await processPathA(text, sourceGroup, fingerprint, ctx);
   } else {
-    await processPathB(text, sourceGroup, fingerprint, ctx);
+    pathSucceeded = await processPathB(text, sourceGroup, fingerprint, ctx);
+  }
+
+  // ✅ FIX #1: Add fingerprint ONLY if path processing succeeded
+  if (pathSucceeded) {
+    fingerprintSet.add(fingerprint);
+    markDirty();
   }
 }
 
