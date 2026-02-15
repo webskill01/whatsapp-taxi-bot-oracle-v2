@@ -32,3 +32,5 @@ baileys_auth/
 .forwarded-messages.json
 logs/
 node_modules/
+admin-bot.json
+taxi-bot.json
