@@ -312,11 +312,18 @@ export async function startBot(config, log, authDir) {
   const fingerprint = getMessageFingerprint(text, null, timeBucket);
 
   // Early duplicate check (before validation)
-  if (fingerprintSet.has(fingerprint)) {
-    stats.duplicatesSkipped++;
-    log.info("🔁 Duplicate fingerprint — skipped");
-    return;
-  }
+  // ── DEDUP RESERVATION (CRITICAL FIX) ──
+if (fingerprintSet.has(fingerprint)) {
+  stats.duplicatesSkipped++;
+  log.info("🔁 Duplicate fingerprint — skipped");
+  return;
+}
+
+// 🔒 RESERVE IMMEDIATELY to close race window
+fingerprintSet.add(fingerprint);
+markDirty(); // safe: debounced
+log.info(`🧠 Dedup reserved: ${fingerprint}`);
+
 
   // ── A4: Settling delay — one-time pause after connect/reconnect ──
   if (needsSettlingDelay) {
@@ -362,10 +369,11 @@ export async function startBot(config, log, authDir) {
   }
 
   // ✅ FIX #1: Add fingerprint ONLY if path processing succeeded
-  if (pathSucceeded) {
-    fingerprintSet.add(fingerprint);
-    markDirty();
-  }
+  // If routing failed completely, rollback reservation (optional but correct)
+if (!pathSucceeded) {
+  fingerprintSet.delete(fingerprint);
+}
+
 }
 
   // ---------------------------------------------------------------------------
