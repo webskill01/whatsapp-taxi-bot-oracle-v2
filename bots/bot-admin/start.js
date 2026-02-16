@@ -1,5 +1,5 @@
 // =============================================================================
-// bots/bot-taxi/start.js — PM2 entry point for bot-taxi.
+// bots/bot-admin/start.js — PM2 entry point for bot-admin.
 // This file owns ONLY: .env loading, path resolution, wiring.
 // All logic lives in core/.
 // =============================================================================
@@ -14,10 +14,10 @@ import dotenv          from 'dotenv';
 // __filename so the file works correctly even if run manually from elsewhere.
 // ---------------------------------------------------------------------------
 const __filename  = fileURLToPath(import.meta.url);
-const BOT_DIR     = path.dirname(__filename);                   // bots/bot-taxi/
-const PROJECT_ROOT = path.resolve(BOT_DIR, '..', '..');         // whatsapp-taxi-bot-multibot/
-const CONFIG_PATH = path.join(BOT_DIR, 'config.json');          // bots/bot-taxi/config.json
-const AUTH_DIR    = path.join(BOT_DIR, 'baileys_auth');         // bots/bot-taxi/baileys_auth/
+const BOT_DIR     = path.dirname(__filename);                   // bots/bot-admin/
+const PROJECT_ROOT = path.resolve(BOT_DIR, '..', '..');         // whatsapp-admin-bot-multibot/
+const CONFIG_PATH = path.join(BOT_DIR, 'config.json');          // bots/bot-admin/config.json
+const AUTH_DIR    = path.join(BOT_DIR, 'baileys_auth');         // bots/bot-admin/baileys_auth/
 
 // ---------------------------------------------------------------------------
 // .env — load BEFORE anything reads process.env (STATS_PORT lives here)
@@ -27,7 +27,7 @@ dotenv.config({ path: path.join(BOT_DIR, '.env') });
 // ---------------------------------------------------------------------------
 // BOT IDENTITY
 // ---------------------------------------------------------------------------
-const BOT_ID = 'bot-taxi';
+const BOT_ID = 'bot-admin';
 
 // ---------------------------------------------------------------------------
 // DYNAMIC IMPORTS — resolved via PROJECT_ROOT so they work no matter what
