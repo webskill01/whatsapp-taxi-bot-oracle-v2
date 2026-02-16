@@ -15,71 +15,68 @@ module.exports = {
     // bot-admin
     // =========================================================================
     {
-      name:   'bot-admin',
-      script: './start.js',                        // relative to cwd below
-      cwd:    './bots/bot-admin',                  // PM2 resolves this from where you run "pm2 start"
+  name: 'bot-admin',
+  script: './start.js',
+  cwd: '/home/ubuntu/whatsapp-taxi-bot-v2/bots/bot-admin',
 
-      instances:  1,
-      exec_mode:  'fork',                          // one process per bot, no cluster
+  interpreter: '/usr/bin/node',
 
-      // ── restart policy ──
-      autorestart:   true,
-      watch:         false,
-      restart_delay: 5000,                         // 5s cooldown between restarts
-      min_uptime:    '15s',                        // must stay up 15s or it counts as a crash
-      max_restarts:  10,
+  instances: 1,
+  exec_mode: 'fork',
 
-      // ── memory ──
-      max_memory_restart: '400M',
-      env: {
-        NODE_OPTIONS: '--max-old-space-size=384',
-      },
+  autorestart: true,
+  watch: false,
+  restart_delay: 5000,
+  exp_backoff_restart_delay: 2000,
+  min_uptime: '15s',
+  max_restarts: 10,
 
-      // ── graceful shutdown ──
-      kill_timeout:            10000,              // 10s for SIGTERM handler to flush + close socket
-      shutdown_with_message:   true,
+  max_memory_restart: '400M',
+  env: {
+    NODE_OPTIONS: '--max-old-space-size=384',
+  },
 
-      // ── logging ──
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      error_file: '../../logs/bot-admin-error.log',   // relative to cwd
-      out_file:   '../../logs/bot-admin-out.log',
-      merge_logs: true,
-    },
+  kill_timeout: 10000,
+  shutdown_with_message: true,
+
+  log_date_format: 'YYYY-MM-DD HH:mm:ss',
+  error_file: '../../logs/bot-admin-error.log',
+  out_file: '../../logs/bot-admin-out.log',
+  merge_logs: true,
+},
     
     // =========================================================================
     // bot-taxi
     // =========================================================================
     {
-      name:   'bot-taxi',
-      script: './start.js',                        // relative to cwd below
-      cwd:    './bots/bot-taxi',                  // PM2 resolves this from where you run "pm2 start"
+  name: 'bot-taxi',
+  script: './start.js',
+  cwd: '/home/ubuntu/whatsapp-taxi-bot-v2/bots/bot-taxi',
 
-      instances:  1,
-      exec_mode:  'fork',                          // one process per bot, no cluster
+  interpreter: '/usr/bin/node',
 
-      // ── restart policy ──
-      autorestart:   true,
-      watch:         false,
-      restart_delay: 5000,                         // 5s cooldown between restarts
-      min_uptime:    '15s',                        // must stay up 15s or it counts as a crash
-      max_restarts:  10,
+  instances: 1,
+  exec_mode: 'fork',
 
-      // ── memory ──
-      max_memory_restart: '400M',
-      env: {
-        NODE_OPTIONS: '--max-old-space-size=384',
-      },
+  autorestart: true,
+  watch: false,
+  restart_delay: 5000,
+  exp_backoff_restart_delay: 2000,
+  min_uptime: '15s',
+  max_restarts: 10,
 
-      // ── graceful shutdown ──
-      kill_timeout:            10000,              // 10s for SIGTERM handler to flush + close socket
-      shutdown_with_message:   true,
+  max_memory_restart: '400M',
+  env: {
+    NODE_OPTIONS: '--max-old-space-size=384',
+  },
 
-      // ── logging ──
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      error_file: '../../logs/bot-taxi-error.log',   // relative to cwd
-      out_file:   '../../logs/bot-taxi-out.log',
-      merge_logs: true,
-    },
-   
+  kill_timeout: 10000,
+  shutdown_with_message: true,
+
+  log_date_format: 'YYYY-MM-DD HH:mm:ss',
+  error_file: '../../logs/bot-taxi-error.log',
+  out_file: '../../logs/bot-taxi-out.log',
+  merge_logs: true,
+},   
   ]
 };
