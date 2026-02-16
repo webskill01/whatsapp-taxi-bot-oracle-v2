@@ -34,6 +34,7 @@ module.exports = {
   max_memory_restart: '400M',
   env: {
     NODE_OPTIONS: '--max-old-space-size=384',
+    TZ: "Asia/Kolkata",
   },
 
   kill_timeout: 10000,
@@ -68,6 +69,7 @@ module.exports = {
   max_memory_restart: '400M',
   env: {
     NODE_OPTIONS: '--max-old-space-size=384',
+    TZ: "Asia/Kolkata",
   },
 
   kill_timeout: 10000,

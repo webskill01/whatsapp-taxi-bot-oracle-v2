@@ -9,6 +9,8 @@
 // FINGERPRINT FIX:
 // ✅ Returns true/false to indicate if message was successfully processed
 // ✅ Fingerprint only saved if return value is true
+//
+// ✅ FULLY COMPATIBLE with enhanced core/index.js (no changes needed here)
 // =============================================================================
 
 import {
