@@ -25,8 +25,8 @@ export const HUMAN_DELAYS = {
 
   // Between-group delay — weighted toward lower end (A5 locked)
   // Most gaps land 0.8-1.1s. Occasionally up to 1.5s.
-  BETWEEN_MIN: 1000,                // 0.8s floor
-  BETWEEN_MAX: 2000,               // 1.5s ceiling
+  BETWEEN_MIN: 800,                // 0.8s floor
+  BETWEEN_MAX: 1500,               // 1.5s ceiling
   BETWEEN_WEIGHT: 0.65,            // bias factor — 65% of range is "normal" band
 
   // Random pause (mimics human hesitation) — 15% chance per gap

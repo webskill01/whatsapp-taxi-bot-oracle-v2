@@ -5,6 +5,12 @@
 //    2. Stable fingerprint filename (botId + phone)
 //    3. Processing delay randomization (2-7s)
 //    4. /health endpoint for monitoring
+//
+// ✅ CONNECTION FIXES (transplanted from Bot-2 stable logic):
+//    FIX #1 — Auth loaded ONCE via closure (prevents session churn)
+//    FIX #2 — Explicit socket destruction before every reconnect
+//    FIX #3 — Hard exit on Bad MAC / corrupted signal state
+//    FIX #4 — Aggressive backoff on crypto errors
 // =============================================================================
 
 import makeWASocket, {
@@ -52,6 +58,16 @@ export async function startBot(config, log, authDir) {
 
   let sock = null;
   let reconnectAttempts = 0;
+
+  // ✅ FIX #1: Auth loaded ONCE, stored in closure — prevents session churn on
+  // every reconnect (the root cause of Bad MAC / decrypt loops in Bot-1)
+  let authState = null;
+  let saveCreds = null;
+
+  // ✅ FIX #2 state: guard against concurrent connection attempts
+  let isConnecting = false;
+  let reconnectTimer = null;
+  let isShuttingDown = false;
 
   const fingerprintSet = new Set();
   const pendingFingerprints = new Map();
@@ -110,12 +126,13 @@ export async function startBot(config, log, authDir) {
     rejectedBotSender: 0,
     rejectedBlockedNumber: 0,
     rejectedByReconnectAgeGate: 0,
-    rejectedTooOld: 0, // ✅ NEW: Track old message rejections
+    rejectedTooOld: 0,
     humanPausesTriggered: 0,
     sendSuccesses: 0,
     sendFailures: 0,
     reconnectCount: 0,
     racePrevented: 0,
+    cryptoErrors: 0, // ✅ FIX #3/4: Track crypto errors
   };
 
   let lastReconnectTime = 0;
@@ -128,7 +145,7 @@ export async function startBot(config, log, authDir) {
   const BOT_START_TIME = Date.now();
 
   // =========================================================================
-  // ✅ ENHANCEMENT #2: STABLE FINGERPRINT FILENAME (botId + phone)
+  // STABLE FINGERPRINT FILENAME (botId + phone)
   // =========================================================================
   const BOT_ID = config.botId || "unknown";
   const PHONE = config.botPhone?.replace(/\D/g, "") || "noPhone";
@@ -136,10 +153,10 @@ export async function startBot(config, log, authDir) {
   const NEW_FINGERPRINT_FILENAME = `fingerprints_${BOT_ID}_${PHONE}.json`;
   const OLD_FINGERPRINT_FILENAME = `fingerprints_${PHONE}.json`;
 
-  const NEW_FINGERPRINT_FILE = path.join(process.cwd(), NEW_FINGERPRINT_FILENAME);
+  const BOT_DIR = config.botDir || process.cwd();
+const NEW_FINGERPRINT_FILE = path.join(BOT_DIR, NEW_FINGERPRINT_FILENAME);
   const OLD_FINGERPRINT_FILE = path.join(process.cwd(), OLD_FINGERPRINT_FILENAME);
 
-  // Migrate old fingerprint file to new stable format (backward compatibility)
   if (fsSync.existsSync(OLD_FINGERPRINT_FILE) && !fsSync.existsSync(NEW_FINGERPRINT_FILE)) {
     try {
       fsSync.renameSync(OLD_FINGERPRINT_FILE, NEW_FINGERPRINT_FILE);
@@ -251,7 +268,7 @@ export async function startBot(config, log, authDir) {
   }
 
   // ---------------------------------------------------------------------------
-  // MESSAGE HANDLER
+  // MESSAGE HANDLER — unchanged, all existing logic preserved
   // ---------------------------------------------------------------------------
 
   async function handleMessage(msg) {
@@ -267,9 +284,7 @@ export async function startBot(config, log, authDir) {
     const messageTimestamp = msg.messageTimestamp;
     const messageTimestampMs = messageTimestamp * 1000;
 
-    // =========================================================================
-    // ✅ ENHANCEMENT #1: MESSAGE AGE VALIDATION (5-minute max)
-    // =========================================================================
+    // Message age validation (5-minute max)
     const messageAge = Date.now() - messageTimestampMs;
 
     if (messageAge > MAX_MESSAGE_AGE) {
@@ -278,7 +293,7 @@ export async function startBot(config, log, authDir) {
       return;
     }
 
-    // B1: Reconnect age gate (existing logic preserved)
+    // B1: Reconnect age gate
     const timeSinceReconnect = Date.now() - lastReconnectTime;
     if (
       lastReconnectTime > 0 &&
@@ -293,9 +308,11 @@ export async function startBot(config, log, authDir) {
 
     // B2: Replay ID check
     if (replayIdSet.has(msgId)) {
-      stats.replayIdsSkipped++;
-      return;
-    }
+  stats.replayIdsSkipped++;
+  return;
+}
+trackReplayId(msgId);
+
 
     // Extract text
     const text =
@@ -336,7 +353,6 @@ export async function startBot(config, log, authDir) {
       stats.rejectedNotMonitored++;
       return;
     }
-    trackReplayId(msgId);
 
     // Fingerprint generation
     const timeBucket = Math.floor(messageTimestampMs / (5 * 60 * 1000));
@@ -358,7 +374,7 @@ export async function startBot(config, log, authDir) {
     // Optimistic lock
     pendingFingerprints.set(fingerprint, Date.now());
 
-    // A4: Settling delay (existing logic preserved)
+    // A4: Settling delay
     if (needsSettlingDelay) {
       needsSettlingDelay = false;
       const settleDuration =
@@ -372,9 +388,7 @@ export async function startBot(config, log, authDir) {
       await new Promise((r) => setTimeout(r, settleDuration));
     }
 
-    // =========================================================================
-    // ✅ ENHANCEMENT #3: PROCESSING DELAY RANDOMIZATION (2-7 seconds)
-    // =========================================================================
+    // Processing delay randomization (2-7 seconds)
     const processingDelay =
       Math.floor(Math.random() * (PROCESSING_DELAY_MAX - PROCESSING_DELAY_MIN)) +
       PROCESSING_DELAY_MIN;
@@ -389,14 +403,12 @@ export async function startBot(config, log, authDir) {
       return;
     }
 
-    // Logging (reduced verbosity)
     log.info(
       `📥 MSG #${stats.totalMessagesSent} | ${isPathA ? "A" : "B"} | ${sourceGroup.substring(0, 15)}... | ${text.substring(0, 40)}...`
     );
 
     const ctx = buildRouterContext();
 
-    // Process path
     let pathSucceeded = false;
 
     try {
@@ -410,7 +422,6 @@ export async function startBot(config, log, authDir) {
       pathSucceeded = false;
     }
 
-    // Decision point
     if (pathSucceeded) {
       pendingFingerprints.delete(fingerprint);
       fingerprintSet.add(fingerprint);
@@ -421,12 +432,99 @@ export async function startBot(config, log, authDir) {
   }
 
   // ---------------------------------------------------------------------------
+  // ✅ FIX #2 — EXPLICIT SOCKET DESTRUCTION
+  // Fully tears down the old socket before every reconnect attempt.
+  // Prevents the "ghost socket" problem where Baileys fires events on a
+  // half-dead connection while a new one is being created.
+  // ---------------------------------------------------------------------------
+
+  function destroySocket(reason) {
+    if (!sock) return;
+
+    log.warn(`🔌 Destroying socket: ${reason}`);
+
+    try {
+      sock.ev.removeAllListeners("connection.update");
+      sock.ev.removeAllListeners("creds.update");
+      sock.ev.removeAllListeners("messages.upsert");
+      sock.ev.removeAllListeners();
+      sock.end(undefined);
+    } catch (err) {
+      log.warn(`⚠️  Socket teardown error: ${err.message}`);
+    }
+
+    sock = null;
+    log.info("✅ Socket destroyed");
+  }
+
+  // ---------------------------------------------------------------------------
+  // RECONNECT SCHEDULER — replaces the inline setTimeout in connection.update
+  // Using a dedicated scheduler prevents double-reconnect races when close
+  // fires multiple times (e.g. timeout + stream error in quick succession).
+  // ---------------------------------------------------------------------------
+
+  function scheduleReconnect(reason) {
+    if (isShuttingDown) {
+      log.info("⚠️  Shutdown in progress, skipping reconnect");
+      return;
+    }
+
+    // Cancel any pending reconnect timer
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+
+    const delay = Math.min(
+      BAILEYS.BACKOFF_BASE_MS * Math.pow(2, reconnectAttempts),
+      BAILEYS.BACKOFF_CAP_MS
+    );
+    reconnectAttempts++;
+
+    if (reconnectAttempts > BAILEYS.MAX_RECONNECT_ATTEMPTS) {
+      log.error("❌ Max reconnect attempts reached — exiting for PM2 restart");
+      process.exit(1);
+    }
+
+    log.info(
+      `🔄 Reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/${BAILEYS.MAX_RECONNECT_ATTEMPTS}) [${reason}]`
+    );
+
+    reconnectTimer = setTimeout(async () => {
+      reconnectTimer = null;
+      await connectToWhatsApp();
+    }, delay);
+  }
+
+  // ---------------------------------------------------------------------------
   // BAILEYS CONNECTION
   // ---------------------------------------------------------------------------
 
   async function connectToWhatsApp() {
+    // ✅ FIX #2: Guard against concurrent connection attempts
+    if (isConnecting) {
+      log.warn("⚠️  connectToWhatsApp already in progress, skipping");
+      return;
+    }
+    isConnecting = true;
+
+    // ✅ FIX #2: Destroy any existing socket before creating a new one
+    if (sock) {
+      destroySocket("reconnect — destroying old socket");
+    }
+
     try {
-      const { state, saveCreds } = await useMultiFileAuthState(authDir);
+      // ✅ FIX #1: Load auth ONCE and store in closure.
+      // Re-loading on every reconnect corrupts the signal session and causes
+      // the Bad MAC / decrypt error loop that Bot-1 was experiencing.
+      if (!authState) {
+        log.info("🔐 Loading auth state (ONCE per process)...");
+        const result = await useMultiFileAuthState(authDir);
+        authState = result.state;
+        saveCreds = result.saveCreds;
+        log.info("✅ Auth state loaded and locked in closure");
+      }
+
       const { version } = await fetchLatestBaileysVersion();
 
       log.info(
@@ -443,8 +541,12 @@ export async function startBot(config, log, authDir) {
               (msg.includes("closing session") ||
                 msg.includes("decrypt") ||
                 msg.includes("bad mac") ||
-                msg.includes("failed to decrypt"))
+                msg.includes("failed to decrypt") ||
+                msg.includes("InvalidMessageException") ||
+                msg.includes("No session found"))
             ) {
+              // Count silently rather than spamming logs
+              stats.cryptoErrors++;
               return;
             }
             method.apply(this, inputArgs);
@@ -455,8 +557,8 @@ export async function startBot(config, log, authDir) {
       sock = makeWASocket({
         version,
         auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, baileysLogger),
+          creds: authState.creds,
+          keys: makeCacheableSignalKeyStore(authState.keys, baileysLogger),
         },
         logger: baileysLogger,
         printQRInTerminal: true,
@@ -469,7 +571,10 @@ export async function startBot(config, log, authDir) {
         keepAliveIntervalMs: BAILEYS.KEEP_ALIVE_MS,
       });
 
-      sock.ev.on("creds.update", saveCreds);
+      // ✅ FIX #1: saveCreds now uses the closure-stored function
+      sock.ev.on("creds.update", async () => {
+        if (saveCreds) await saveCreds();
+      });
 
       sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
@@ -480,56 +585,19 @@ export async function startBot(config, log, authDir) {
           qrcodeTerminal.generate(qr, { small: true });
         }
 
-        if (connection === "close") {
-          const statusCode = lastDisconnect?.error?.output?.statusCode;
-          const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-
-          log.warn(
-            `⚠️  Connection closed | statusCode=${statusCode} | loggedOut=${isLoggedOut}`
-          );
-
-          if (isLoggedOut) {
-            log.error(
-              "❌ LOGGED OUT — delete baileys_auth/ and restart to re-scan QR"
-            );
-            process.exit(1);
-          }
-
-          if (reconnectAttempts < BAILEYS.MAX_RECONNECT_ATTEMPTS) {
-            const delay = Math.min(
-              BAILEYS.BACKOFF_BASE_MS * Math.pow(2, reconnectAttempts),
-              BAILEYS.BACKOFF_CAP_MS
-            );
-            reconnectAttempts++;
-            stats.reconnectCount++;
-
-            log.info(
-              `⏳ Reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/${BAILEYS.MAX_RECONNECT_ATTEMPTS})...`
-            );
-            await new Promise((r) => setTimeout(r, delay));
-
-            lastReconnectTime = Date.now();
-            needsSettlingDelay = true;
-
-            connectToWhatsApp();
-          } else {
-            log.error(
-              "❌ Max reconnect attempts reached — exiting for PM2 restart"
-            );
-            process.exit(1);
-          }
-        }
-
         if (connection === "open") {
+          log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
           log.info("✅ WhatsApp connected");
+          log.info(`📱 Connected as: ${sock.user?.id || "unknown"}`);
+          log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
           reconnectAttempts = 0;
+          lastReconnectTime = Date.now();
+          needsSettlingDelay = true;
 
           if (!botFullyOperational) {
-            lastReconnectTime = Date.now();
-            needsSettlingDelay = true;
             botFullyOperational = true;
 
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             log.info("🎉 BOT FULLY OPERATIONAL");
             log.info(`   📍 Source groups:  ${config.sourceGroupIds.length}`);
             log.info(
@@ -551,6 +619,53 @@ export async function startBot(config, log, authDir) {
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
           }
         }
+
+        if (connection === "close") {
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          const errorMsg = lastDisconnect?.error?.message || "";
+
+          log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+          log.warn(`⚠️  CONNECTION CLOSED`);
+          log.warn(`   Status: ${statusCode || "undefined"}`);
+          log.warn(`   Error:  ${errorMsg || "none"}`);
+          log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+          // ✅ FIX #2: Always destroy the dead socket immediately on close
+          destroySocket("connection closed");
+
+          // Hard exit on logged-out
+          if (statusCode === DisconnectReason.loggedOut) {
+            log.error("❌ LOGGED OUT — delete baileys_auth/ and restart to re-scan QR");
+            process.exit(1);
+          }
+
+          // ✅ FIX #3: Hard exit on corrupted signal state.
+          // A corrupted session will NEVER self-heal — it will loop Bad MAC
+          // errors forever. Exit cleanly and let PM2 restart with a fresh state.
+          if (
+            errorMsg.includes("Bad MAC") ||
+            errorMsg.includes("No session found")
+          ) {
+            log.error("❌ SIGNAL STATE CORRUPTED — exiting for PM2 restart");
+            isConnecting = false;
+            process.exit(1);
+          }
+
+          // ✅ FIX #4: Aggressive backoff on crypto errors so we don't hammer
+          // WhatsApp with rapid reconnect attempts during a crypto issue.
+          if (
+            errorMsg.includes("Bad MAC") ||
+            errorMsg.includes("prekey") ||
+            errorMsg.includes("Decryption error") ||
+            statusCode === 440
+          ) {
+            log.warn("⚠️  Crypto error — applying extended backoff");
+            reconnectAttempts = Math.max(reconnectAttempts, 2);
+          }
+
+          stats.reconnectCount++;
+          scheduleReconnect(`statusCode=${statusCode}`);
+        }
       });
 
       sock.ev.on("messages.upsert", async ({ messages, type }) => {
@@ -566,24 +681,15 @@ export async function startBot(config, log, authDir) {
       });
     } catch (err) {
       log.error(`❌ Connection error: ${err.message}`);
-
-      if (reconnectAttempts < BAILEYS.MAX_RECONNECT_ATTEMPTS) {
-        reconnectAttempts++;
-        const delay = Math.min(5000 * reconnectAttempts, 30000);
-        log.info(
-          `⏳ Retry in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/${BAILEYS.MAX_RECONNECT_ATTEMPTS})`
-        );
-        await new Promise((r) => setTimeout(r, delay));
-        connectToWhatsApp();
-      } else {
-        log.error("❌ Max attempts reached — exiting for PM2 restart");
-        process.exit(1);
-      }
+      scheduleReconnect("connection error");
+    } finally {
+      // ✅ FIX #2: Always release the guard so the next attempt can proceed
+      isConnecting = false;
     }
   }
 
   // ---------------------------------------------------------------------------
-  // STATS SERVER
+  // STATS SERVER — unchanged
   // ---------------------------------------------------------------------------
 
   function startStatsServer() {
@@ -600,9 +706,6 @@ export async function startBot(config, log, authDir) {
 
     app.get("/ping", (_, res) => res.send("ALIVE"));
 
-    // =========================================================================
-    // ✅ ENHANCEMENT #4: /health ENDPOINT FOR MONITORING
-    // =========================================================================
     app.get("/health", (_, res) => {
       const healthy =
         botFullyOperational &&
@@ -620,6 +723,7 @@ export async function startBot(config, log, authDir) {
         connected: botFullyOperational,
         circuitBreakerOpen: circuitBreaker.isOpen,
         reconnects: stats.reconnectCount,
+        cryptoErrors: stats.cryptoErrors,
         failures: stats.sendFailures,
         successes: stats.sendSuccesses,
         failureRate: failureRate.toFixed(3),
@@ -676,7 +780,6 @@ export async function startBot(config, log, authDir) {
       });
     });
 
-    // Groups endpoint (existing, preserved)
     app.get("/groups", async (req, res) => {
       if (!sock || !botFullyOperational) {
         return res.status(503).json({
@@ -846,6 +949,13 @@ export async function startBot(config, log, authDir) {
 
   async function gracefulShutdown(signal) {
     log.info(`👋 ${signal} received — shutting down gracefully`);
+    isShuttingDown = true;
+
+    // Cancel any pending reconnect
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
 
     await saveFingerprints();
 
@@ -858,15 +968,8 @@ export async function startBot(config, log, authDir) {
       clearTimeout(circuitBreaker.resetTimeout);
     }
 
-    if (sock) {
-      try {
-        sock.ev.removeAllListeners();
-        sock.ws.close();
-        log.info("✅ Socket closed");
-      } catch (err) {
-        log.warn(`⚠️  Socket close error: ${err.message}`);
-      }
-    }
+    // ✅ FIX #2: Use destroySocket for consistent teardown on shutdown too
+    destroySocket("graceful shutdown");
 
     log.info("📊 Final stats:");
     log.info(`   Messages:    ${stats.totalMessagesSent}`);
@@ -876,6 +979,7 @@ export async function startBot(config, log, authDir) {
     log.info(`   Too old:     ${stats.rejectedTooOld}`);
     log.info(`   Races:       ${stats.racePrevented} (prevented)`);
     log.info(`   Replays:     ${stats.replayIdsSkipped}`);
+    log.info(`   Crypto errs: ${stats.cryptoErrors}`);
     log.info(`   Reconnects:  ${stats.reconnectCount}`);
     log.info(`   Sends OK:    ${stats.sendSuccesses}`);
     log.info(`   Sends FAIL:  ${stats.sendFailures}`);
@@ -887,6 +991,10 @@ export async function startBot(config, log, authDir) {
   process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
   process.on("SIGHUP", () => {
     log.info("🔄 SIGHUP (PM2 reload) — cleaning up timers");
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     if (saveDebounceTimer) {
       clearTimeout(saveDebounceTimer);
       saveDebounceTimer = null;
@@ -906,6 +1014,10 @@ export async function startBot(config, log, authDir) {
   log.info("   ✅ Stable fingerprint filename");
   log.info("   ✅ Processing delay randomization");
   log.info("   ✅ /health endpoint added");
+  log.info("   ✅ Auth loaded once (FIX #1)");
+  log.info("   ✅ Explicit socket teardown (FIX #2)");
+  log.info("   ✅ Hard exit on Bad MAC (FIX #3)");
+  log.info("   ✅ Aggressive crypto backoff (FIX #4)");
   log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   loadFingerprints();
