@@ -35,7 +35,6 @@ import {
 } from "@whiskeysockets/baileys";
 
 import express from "express";
-import QRCode   from "qrcode";
 import pino     from "pino";
 import fs       from "fs";
 import path     from "path";
@@ -769,7 +768,7 @@ export async function startBot(config, log, authDir) {
       }
     });
 
-    // QR PNG
+    // QR PNG — dynamic import so missing package doesn't crash the process
     app.get("/qr", async (req, res) => {
       if (!latestQR) {
         return res.status(404).send("QR not available. Bot may already be connected.");
@@ -778,17 +777,22 @@ export async function startBot(config, log, authDir) {
         return res.status(410).send("QR expired. Wait for a new one (~20s).");
       }
       try {
+        const QRCode = (await import("qrcode")).default;
         const buf = await QRCode.toBuffer(latestQR, {
           type: "png", width: 400, margin: 2,
           color: { dark: "#000000", light: "#FFFFFF" },
         });
         res.type("png").send(buf);
       } catch (err) {
+        // qrcode not installed yet — tell user to npm install
+        if (err.code === "ERR_MODULE_NOT_FOUND") {
+          return res.status(503).send("QR image unavailable: run 'npm install' to add the qrcode package, then restart.");
+        }
         res.status(500).send("QR generation failed");
       }
     });
 
-    // QR base64
+    // QR base64 — same dynamic import pattern
     app.get("/qr/base64", async (req, res) => {
       if (!latestQR) {
         return res.status(404).json({ error: "QR not available", qrAvailable: false });
@@ -797,9 +801,13 @@ export async function startBot(config, log, authDir) {
         return res.status(410).json({ error: "QR expired", qrAvailable: false });
       }
       try {
+        const QRCode = (await import("qrcode")).default;
         const dataURL = await QRCode.toDataURL(latestQR, { width: 400, margin: 2 });
         res.json({ qr: dataURL, qrAvailable: true, timestamp: qrTimestamp });
       } catch (err) {
+        if (err.code === "ERR_MODULE_NOT_FOUND") {
+          return res.status(503).json({ error: "qrcode package not installed. Run npm install.", qrAvailable: false });
+        }
         res.status(500).json({ error: "QR generation failed" });
       }
     });
