@@ -1,229 +1,203 @@
 // =============================================================================
-// core/index.js — Baileys connection + message handler + stats server.
-// ✅ ENHANCEMENTS ADDED (no breaking changes):
-//    1. Message age validation (5-minute max)
-//    2. Stable fingerprint filename (botId + phone)
-//    3. Processing delay randomization (2-7s)
-//    4. /health endpoint for monitoring
+// core/index.js — WhatsApp Bot Core
+// =============================================================================
+// Bot-2 STABILITY ARCHITECTURE:
+//   ✅ Auth state loaded ONCE (closure) — fixes Bad MAC death loop
+//   ✅ isConnecting guard — no concurrent socket creation
+//   ✅ Exponential backoff: 3s→6s→12s→24s→48s cap 60s
+//   ✅ Hard exit on loggedOut / Bad MAC / No session (PM2 restarts cleanly)
+//   ✅ B1: Reconnect age gate (30s window, 10s max msg age)
+//   ✅ B2: Replay ID dedup (rolling 200)
+//   ✅ A4: Settling delay (5-15s after connect)
+//   ✅ C1: Batch fingerprint cleanup on overflow
+//   ✅ C2: Debounced disk write (30s)
+//   ✅ Stale pending fingerprint cleanup (60s timeout → purge)
+//   ✅ QR code HTTP endpoint (PNG + base64) for remote scanning
+//   ✅ /health endpoint for monitoring
+//   ✅ Enriched /groups endpoint with full metadata + path categorisation
+//   ✅ PM2 graceful shutdown (SIGINT / SIGTERM / SIGHUP)
+//   ✅ 5-minute message age gate
+//   ✅ Processing delay randomisation (2-7s)
+//   ✅ Stable per-bot fingerprint filename (botId + phone)
 //
-// ✅ CONNECTION FIXES (transplanted from Bot-2 stable logic):
-//    FIX #1 — Auth loaded ONCE via closure (prevents session churn)
-//    FIX #2 — Explicit socket destruction before every reconnect
-//    FIX #3 — Hard exit on Bad MAC / corrupted signal state
-//    FIX #4 — Aggressive backoff on crypto errors
+// Bot-1 ROUTING PRESERVED:
+//   ✅ Path A: source group → paid[] + city + free
+//   ✅ Path B: freeCommonGroup → paid[] + city (no free echo)
+//   ✅ /groups shows source / paid / city / free_common / other
 // =============================================================================
 
-import makeWASocket, {
+import {
+  makeWASocket,
   DisconnectReason,
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
   fetchLatestBaileysVersion,
 } from "@whiskeysockets/baileys";
-import { Boom } from "@hapi/boom";
+
 import express from "express";
-import pino from "pino";
-import fs from "fs/promises";
-import fsSync from "fs";
-import path from "path";
+import QRCode   from "qrcode";
+import pino     from "pino";
+import fs       from "fs";
+import path     from "path";
 
 import { getMessageFingerprint } from "./filter.js";
-import { processPathA, processPathB } from "./router.js";
-import {
-  CACHE,
-  RECONNECT,
-  BAILEYS,
-  SEND_COOLDOWN_CLEANUP_INTERVAL,
-  STATS,
-  MESSAGE,
-  RATE_LIMITS,
-  CIRCUIT_BREAKER,
-} from "./globalDefaults.js";
-import { panic } from "./logger.js";
+import { processMessage }        from "./router.js";
+import { GLOBAL_CONFIG }         from "./globalConfig.js";
 
 // =============================================================================
-// ✅ NEW CONSTANTS FOR ENHANCEMENTS
+// CONSTANTS
 // =============================================================================
-const MAX_MESSAGE_AGE = 5 * 60 * 1000; // 5 minutes
-const PROCESSING_DELAY_MIN = 2000;     // 2 seconds
-const PROCESSING_DELAY_MAX = 7000;     // 7 seconds
+const MAX_MESSAGE_AGE      = 5 * 60 * 1000;   // 5 minutes
+const PROCESSING_DELAY_MIN = 2_000;            // 2s
+const PROCESSING_DELAY_MAX = 7_000;            // 7s
 
-// -----------------------------------------------------------------------------
+// =============================================================================
 // MAIN EXPORT
-// -----------------------------------------------------------------------------
+// =============================================================================
 
 export async function startBot(config, log, authDir) {
-  // ---------------------------------------------------------------------------
+
+  // ===========================================================================
   // STATE
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
 
-  let sock = null;
+  let sock              = null;
   let reconnectAttempts = 0;
+  let reconnectTimer    = null;
+  let isShuttingDown    = false;
+  let isConnecting      = false;
 
-  // ✅ FIX #1: Auth loaded ONCE, stored in closure — prevents session churn on
-  // every reconnect (the root cause of Bad MAC / decrypt loops in Bot-1)
+  // Auth loaded ONCE — stored in closure (critical for Bad MAC fix)
   let authState = null;
   let saveCreds = null;
 
-  // ✅ FIX #2 state: guard against concurrent connection attempts
-  let isConnecting = false;
-  let reconnectTimer = null;
-  let isShuttingDown = false;
+  // QR code state for HTTP endpoint
+  let latestQR     = null;
+  let qrTimestamp  = null;
 
-  const fingerprintSet = new Set();
-  const pendingFingerprints = new Map();
+  // Deduplication
+  const fingerprintSet      = new Set();
+  const pendingFingerprints = new Map();  // optimistic lock
+  const replayIdSet         = new Set(); // B2
 
-  const cleanupPendingFingerprints = () => {
-    setImmediate(() => {
-      const now = Date.now();
-      const staleTimeout = 60000;
-      let cleaned = 0;
-
-      for (const [fp, timestamp] of pendingFingerprints.entries()) {
-        if (now - timestamp > staleTimeout) {
-          pendingFingerprints.delete(fp);
-          cleaned++;
-        }
-      }
-
-      if (cleaned > 0) {
-        log.warn(`🧹 Cleaned ${cleaned} stale pending fingerprints`);
-      }
-    });
-  };
-
-  setInterval(cleanupPendingFingerprints, 30000);
-
-  const replayIdSet = new Set();
-  const inFlightSends = new Map();
-
-  const messageCount = {
-    hourly: 0,
-    daily: 0,
-    lastHourReset: Date.now(),
-    lastDayReset: Date.now(),
-  };
-
-  const circuitBreaker = {
-    failureCount: 0,
-    lastFailureTime: 0,
-    isOpen: false,
-    resetTimeout: null,
-  };
-
+  // Stats
   const stats = {
-    totalMessagesSent: 0,
-    pathAProcessed: 0,
-    pathBProcessed: 0,
-    duplicatesSkipped: 0,
-    replayIdsSkipped: 0,
-    rejectedNoPhone: 0,
-    rejectedNotTaxi: 0,
-    rejectedTooShort: 0,
-    rejectedRateLimit: 0,
-    rejectedEmptyBody: 0,
-    rejectedNotMonitored: 0,
-    rejectedFromMe: 0,
-    rejectedBotSender: 0,
-    rejectedBlockedNumber: 0,
+    totalProcessed:             0,
+    duplicatesSkipped:          0,
+    replayIdsSkipped:           0,
+    rejectedNoPhone:            0,
+    rejectedNotTaxi:            0,
+    rejectedTooShort:           0,
+    rejectedEmptyBody:          0,
+    rejectedFromMe:             0,
+    rejectedBotSender:          0,
+    rejectedBlockedNumber:      0,
     rejectedByReconnectAgeGate: 0,
-    rejectedTooOld: 0,
-    humanPausesTriggered: 0,
-    sendSuccesses: 0,
-    sendFailures: 0,
-    reconnectCount: 0,
-    racePrevented: 0,
-    cryptoErrors: 0, // ✅ FIX #3/4: Track crypto errors
+    rejectedNotMonitored:       0,
+    rejectedRateLimit:          0,
+    rejectedTooOld:             0,
+    sendSuccesses:              0,
+    sendFailures:               0,
+    reconnectCount:             0,
+    pathARouted:                0,
+    pathBRouted:                0,
+    cryptoErrors:               0,
+    racePrevented:              0,
   };
 
-  let lastReconnectTime = 0;
+  // B1 reconnect state
+  let lastReconnectTime   = 0;
   let botFullyOperational = false;
+
+  // A4 settling flag
   let needsSettlingDelay = true;
-  let fingerprintDirty = false;
-  let saveDebounceTimer = null;
-  let isSaving = false;
+
+  // C2 debounce
+  let fingerprintDirty    = false;
+  let saveDebounceTimer   = null;
 
   const BOT_START_TIME = Date.now();
 
-  // =========================================================================
-  // STABLE FINGERPRINT FILENAME (botId + phone)
-  // =========================================================================
-  const BOT_ID = config.botId || "unknown";
-  const PHONE = config.botPhone?.replace(/\D/g, "") || "noPhone";
+  // ===========================================================================
+  // STABLE FINGERPRINT FILE (Bot-2: botId + phone → survives rename)
+  // ===========================================================================
 
-  const NEW_FINGERPRINT_FILENAME = `fingerprints_${BOT_ID}_${PHONE}.json`;
-  const OLD_FINGERPRINT_FILENAME = `fingerprints_${PHONE}.json`;
+  const BOT_ID = config.botId || path.basename(config.botDir || process.cwd());
+  const PHONE  = (config.botPhone || "").replace(/\D/g, "") || "noPhone";
 
-  const BOT_DIR = config.botDir || process.cwd();
-const NEW_FINGERPRINT_FILE = path.join(BOT_DIR, NEW_FINGERPRINT_FILENAME);
-  const OLD_FINGERPRINT_FILE = path.join(process.cwd(), OLD_FINGERPRINT_FILENAME);
+  const NEW_FP_FILENAME = `fingerprints_${BOT_ID}_${PHONE}.json`;
+  const OLD_FP_FILENAME = `fingerprints_${PHONE}.json`;
+  const NEW_FP_FILE     = path.join(config.botDir || process.cwd(), NEW_FP_FILENAME);
+  const OLD_FP_FILE     = path.join(config.botDir || process.cwd(), OLD_FP_FILENAME);
 
-  if (fsSync.existsSync(OLD_FINGERPRINT_FILE) && !fsSync.existsSync(NEW_FINGERPRINT_FILE)) {
+  // Migrate old filename on first run
+  if (fs.existsSync(OLD_FP_FILE) && !fs.existsSync(NEW_FP_FILE)) {
     try {
-      fsSync.renameSync(OLD_FINGERPRINT_FILE, NEW_FINGERPRINT_FILE);
-      log.info(`📂 Migrated fingerprint file: ${OLD_FINGERPRINT_FILENAME} → ${NEW_FINGERPRINT_FILENAME}`);
+      fs.renameSync(OLD_FP_FILE, NEW_FP_FILE);
+      log.info(`📂 Fingerprint migrated: ${OLD_FP_FILENAME} → ${NEW_FP_FILENAME}`);
     } catch (err) {
       log.warn(`⚠️  Fingerprint migration failed: ${err.message}`);
     }
   }
 
-  const FINGERPRINT_FILE = NEW_FINGERPRINT_FILE;
-  const BOT_FINGERPRINT_FILENAME = NEW_FINGERPRINT_FILENAME;
+  const FINGERPRINT_FILE = NEW_FP_FILE;
 
-  // ---------------------------------------------------------------------------
-  // FINGERPRINT PERSISTENCE (async, non-blocking)
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // STALE PENDING FINGERPRINT CLEANUP (Bot-2 addition)
+  // ===========================================================================
+
+  setInterval(() => {
+    const now          = Date.now();
+    const staleTimeout = 60_000;
+    for (const [fp, timestamp] of pendingFingerprints.entries()) {
+      if (now - timestamp > staleTimeout) {
+        pendingFingerprints.delete(fp);
+        log.warn(`🧹 Removed stale pending fingerprint: ${fp}`);
+      }
+    }
+  }, 30_000);
+
+  // ===========================================================================
+  // C2: FINGERPRINT PERSISTENCE
+  // ===========================================================================
 
   function loadFingerprints() {
     try {
-      if (fsSync.existsSync(FINGERPRINT_FILE)) {
-        const data = JSON.parse(fsSync.readFileSync(FINGERPRINT_FILE, "utf8"));
-        const cutoff = Date.now() - CACHE.FINGERPRINT_TTL_MS;
-
-        let loaded = 0;
+      if (fs.existsSync(FINGERPRINT_FILE)) {
+        const data   = JSON.parse(fs.readFileSync(FINGERPRINT_FILE, "utf8"));
+        const cutoff = Date.now() - GLOBAL_CONFIG.deduplication.fingerprintTTL;
+        let loaded   = 0;
         for (const item of data) {
           if (item.timestamp > cutoff) {
             fingerprintSet.add(item.fingerprint);
             loaded++;
           }
         }
-        log.info(`📂 Loaded ${loaded} fingerprints (2h TTL) from ${BOT_FINGERPRINT_FILENAME}`);
+        log.info(`📂 Loaded ${loaded} fingerprints (2h TTL) from ${NEW_FP_FILENAME}`);
       } else {
-        fsSync.writeFileSync(FINGERPRINT_FILE, JSON.stringify([]), "utf8");
-        log.info(`📂 Created per-bot fingerprint file: ${BOT_FINGERPRINT_FILENAME}`);
+        fs.writeFileSync(FINGERPRINT_FILE, JSON.stringify([]), "utf8");
+        log.info(`📂 Created fingerprint file: ${NEW_FP_FILENAME}`);
       }
     } catch (err) {
       log.warn(`⚠️  Fingerprint load failed: ${err.message}`);
     }
   }
 
-  async function saveFingerprints() {
-    if (isSaving) {
-      log.info("⏭️  Save already in progress, skipping");
-      return;
-    }
-
-    isSaving = true;
-
+  function saveFingerprints() {
     try {
       const data = Array.from(fingerprintSet).map((fp) => ({
         fingerprint: fp,
-        timestamp: Date.now(),
+        timestamp:   Date.now(),
       }));
-
-      await fs.writeFile(
+      fs.writeFileSync(
         FINGERPRINT_FILE,
-        JSON.stringify(data.slice(-CACHE.FINGERPRINT_SAVE_CAP)),
+        JSON.stringify(data.slice(-GLOBAL_CONFIG.deduplication.fingerprintSaveCap)),
         "utf8"
       );
-
       fingerprintDirty = false;
-      log.info(
-        `📂 Fingerprints saved (${Math.min(data.length, CACHE.FINGERPRINT_SAVE_CAP)} entries) to ${BOT_FINGERPRINT_FILENAME}`
-      );
+      log.info(`📂 Saved ${Math.min(data.length, GLOBAL_CONFIG.deduplication.fingerprintSaveCap)} fingerprints to ${NEW_FP_FILENAME}`);
     } catch (err) {
       log.warn(`⚠️  Fingerprint save failed: ${err.message}`);
-    } finally {
-      isSaving = false;
     }
   }
 
@@ -231,15 +205,15 @@ const NEW_FINGERPRINT_FILE = path.join(BOT_DIR, NEW_FINGERPRINT_FILENAME);
     fingerprintDirty = true;
     if (!saveDebounceTimer) {
       saveDebounceTimer = setTimeout(() => {
-        saveFingerprints();
+        if (fingerprintDirty) saveFingerprints();
         saveDebounceTimer = null;
-      }, CACHE.SAVE_DEBOUNCE_MS);
+      }, GLOBAL_CONFIG.deduplication.saveDebounceMs);
     }
   }
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // UTILITY
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
 
   function normalizePhone(p) {
     return p.replace(/\D/g, "").slice(-10);
@@ -247,74 +221,57 @@ const NEW_FINGERPRINT_FILE = path.join(BOT_DIR, NEW_FINGERPRINT_FILENAME);
 
   function trackReplayId(msgId) {
     replayIdSet.add(msgId);
-    if (replayIdSet.size > CACHE.MAX_REPLAY_IDS) {
+    if (replayIdSet.size > GLOBAL_CONFIG.deduplication.maxReplayIds) {
       const first = replayIdSet.values().next().value;
       replayIdSet.delete(first);
     }
   }
 
-  function buildRouterContext() {
-    return {
-      sock,
-      stats,
-      messageCount,
-      circuitBreaker,
-      inFlightSends,
-      log,
-      config,
-      fingerprintSet,
-      markDirty,
-    };
-  }
-
-  // ---------------------------------------------------------------------------
-  // MESSAGE HANDLER — unchanged, all existing logic preserved
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // MESSAGE HANDLER
+  // ===========================================================================
 
   async function handleMessage(msg) {
+    // Only group messages
     if (!msg.key.remoteJid?.endsWith("@g.us")) return;
 
+    // Skip own messages
     if (msg.key.fromMe === true) {
       stats.rejectedFromMe++;
       return;
     }
 
-    const msgId = msg.key.id;
-    const sourceGroup = msg.key.remoteJid;
-    const messageTimestamp = msg.messageTimestamp;
-    const messageTimestampMs = messageTimestamp * 1000;
+    const msgId              = msg.key.id;
+    const sourceGroup        = msg.key.remoteJid;
+    const messageTimestampMs = (msg.messageTimestamp || 0) * 1000;
 
-    // Message age validation (5-minute max)
+    // ── Message age gate (5 min) ──
     const messageAge = Date.now() - messageTimestampMs;
-
     if (messageAge > MAX_MESSAGE_AGE) {
       stats.rejectedTooOld++;
-      log.warn(`⏰ Old message dropped: ${Math.floor(messageAge / 1000)}s old (max ${MAX_MESSAGE_AGE / 1000}s)`);
       return;
     }
 
-    // B1: Reconnect age gate
+    // ── B1: Reconnect age gate ──
     const timeSinceReconnect = Date.now() - lastReconnectTime;
     if (
       lastReconnectTime > 0 &&
-      timeSinceReconnect < RECONNECT.STRICT_WINDOW_DURATION
+      timeSinceReconnect < GLOBAL_CONFIG.reconnect.strictWindowDuration
     ) {
-      const reconnectMessageAge = Date.now() - messageTimestampMs;
-      if (reconnectMessageAge > RECONNECT.STRICT_AGE_MS) {
+      if (Date.now() - messageTimestampMs > GLOBAL_CONFIG.reconnect.strictAgeMs) {
         stats.rejectedByReconnectAgeGate++;
         return;
       }
     }
 
-    // B2: Replay ID check
+    // ── B2: Replay ID check ──
     if (replayIdSet.has(msgId)) {
-  stats.replayIdsSkipped++;
-  return;
-}
-trackReplayId(msgId);
+      stats.replayIdsSkipped++;
+      return;
+    }
+    trackReplayId(msgId);
 
-
-    // Extract text
+    // ── Extract text ──
     const text =
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
@@ -327,25 +284,25 @@ trackReplayId(msgId);
       return;
     }
 
-    // Bot self-send check
-    const senderPhone = sourceGroup.split("@")[0] || "";
+    // ── Bot self-send check ──
     const participantPhone = (msg.key.participant || "").split("@")[0] || "";
-
+    const botPhone         = config.botPhone || "";
     if (
-      normalizePhone(senderPhone) === normalizePhone(config.botPhone) ||
-      normalizePhone(participantPhone) === normalizePhone(config.botPhone)
+      participantPhone &&
+      botPhone &&
+      normalizePhone(participantPhone) === normalizePhone(botPhone)
     ) {
       stats.rejectedBotSender++;
       return;
     }
 
-    // Min length check
-    if (text.length < MESSAGE.MIN_LENGTH) {
+    // ── Min length ──
+    if (text.length < GLOBAL_CONFIG.validation.minMessageLength) {
       stats.rejectedTooShort++;
       return;
     }
 
-    // Path detection
+    // ── Path detection (Bot-1 logic) ──
     const isPathA = config.sourceGroupIds.includes(sourceGroup);
     const isPathB = sourceGroup === config.freeCommonGroupId;
 
@@ -354,183 +311,163 @@ trackReplayId(msgId);
       return;
     }
 
-    // Fingerprint generation
-    const timeBucket = Math.floor(messageTimestampMs / (5 * 60 * 1000));
+    // ── Fingerprint dedup ──
+    const timeBucket  = Math.floor(messageTimestampMs / (5 * 60 * 1000));
     const fingerprint = getMessageFingerprint(text, null, timeBucket);
 
-    // Duplicate check (permanent)
     if (fingerprintSet.has(fingerprint)) {
       stats.duplicatesSkipped++;
+      log.info(`🔁 Duplicate (saved) — skipped: ${fingerprint}`);
       return;
     }
 
-    // Duplicate check (pending - race prevention)
     if (pendingFingerprints.has(fingerprint)) {
       stats.duplicatesSkipped++;
       stats.racePrevented++;
+      log.warn(`⚡ Race prevented: ${fingerprint}`);
       return;
     }
 
     // Optimistic lock
     pendingFingerprints.set(fingerprint, Date.now());
 
-    // A4: Settling delay
+    // ── A4: Settling delay (first message after connect) ──
     if (needsSettlingDelay) {
       needsSettlingDelay = false;
       const settleDuration =
-        RECONNECT.SETTLING_MIN +
-        Math.floor(
-          Math.random() * (RECONNECT.SETTLING_MAX - RECONNECT.SETTLING_MIN)
-        );
-      log.info(
-        `⏳ Settling delay: ${(settleDuration / 1000).toFixed(1)}s (first message after connect)`
-      );
+        GLOBAL_CONFIG.reconnect.settlingMin +
+        Math.floor(Math.random() * (GLOBAL_CONFIG.reconnect.settlingMax - GLOBAL_CONFIG.reconnect.settlingMin));
+      log.info(`⏳ Settling: ${(settleDuration / 1000).toFixed(1)}s`);
       await new Promise((r) => setTimeout(r, settleDuration));
     }
 
-    // Processing delay randomization (2-7 seconds)
+    // ── Processing delay (2-7s anti-ban) ──
     const processingDelay =
       Math.floor(Math.random() * (PROCESSING_DELAY_MAX - PROCESSING_DELAY_MIN)) +
       PROCESSING_DELAY_MIN;
-
-    log.info(`⏳ Processing delay: ${(processingDelay / 1000).toFixed(1)}s`);
     await new Promise((r) => setTimeout(r, processingDelay));
 
-    // Circuit breaker gate
-    if (circuitBreaker.isOpen) {
-      log.warn("🔴 Circuit breaker OPEN — message dropped");
-      pendingFingerprints.delete(fingerprint);
-      return;
-    }
+    stats.totalProcessed++;
+    log.info(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    log.info(`📥 MSG #${stats.totalProcessed} | Path ${isPathA ? "A" : "B"} | ${sourceGroup.substring(0, 18)}...`);
+    log.info(`   "${text.substring(0, 60)}${text.length > 60 ? "..." : ""}"`);
+    log.info(`   FP: ${fingerprint}`);
 
-    log.info(
-      `📥 MSG #${stats.totalMessagesSent} | ${isPathA ? "A" : "B"} | ${sourceGroup.substring(0, 15)}... | ${text.substring(0, 40)}...`
-    );
-
-    const ctx = buildRouterContext();
-
-    let pathSucceeded = false;
-
+    let routingResult;
     try {
-      if (isPathA) {
-        pathSucceeded = await processPathA(text, sourceGroup, fingerprint, ctx);
-      } else {
-        pathSucceeded = await processPathB(text, sourceGroup, fingerprint, ctx);
-      }
+      routingResult = await processMessage(sock, msg, config, stats, log);
     } catch (err) {
       log.error(`❌ Routing error: ${err.message}`);
-      pathSucceeded = false;
+      routingResult = { wasRouted: false, path: "none" };
     }
 
-    if (pathSucceeded) {
+    // ── Commit or discard fingerprint ──
+    if (routingResult?.wasRouted) {
       pendingFingerprints.delete(fingerprint);
       fingerprintSet.add(fingerprint);
       markDirty();
+
+      if (routingResult.path === "A") stats.pathARouted++;
+      if (routingResult.path === "B") stats.pathBRouted++;
+
+      log.info(`✅ FP committed: ${fingerprint}`);
+
+      // C1: Cleanup on overflow
+      if (fingerprintSet.size > GLOBAL_CONFIG.deduplication.maxFingerprintCache) {
+        const targetSize = Math.floor(
+          GLOBAL_CONFIG.deduplication.maxFingerprintCache *
+          GLOBAL_CONFIG.deduplication.cleanupTargetRatio
+        );
+        const toDelete = fingerprintSet.size - targetSize;
+        const iterator = fingerprintSet.values();
+        for (let i = 0; i < toDelete; i++) {
+          const val = iterator.next().value;
+          if (val) fingerprintSet.delete(val);
+        }
+        log.info(`🧹 FP cleanup: ${toDelete} removed, ${fingerprintSet.size} remain`);
+      }
     } else {
       pendingFingerprints.delete(fingerprint);
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // ✅ FIX #2 — EXPLICIT SOCKET DESTRUCTION
-  // Fully tears down the old socket before every reconnect attempt.
-  // Prevents the "ghost socket" problem where Baileys fires events on a
-  // half-dead connection while a new one is being created.
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // SOCKET TEARDOWN
+  // ===========================================================================
 
   function destroySocket(reason) {
     if (!sock) return;
-
-    log.warn(`🔌 Destroying socket: ${reason}`);
-
+    log.info(`🔌 Destroying socket: ${reason}`);
     try {
-      sock.ev.removeAllListeners("connection.update");
-      sock.ev.removeAllListeners("creds.update");
-      sock.ev.removeAllListeners("messages.upsert");
       sock.ev.removeAllListeners();
       sock.end(undefined);
     } catch (err) {
       log.warn(`⚠️  Socket teardown error: ${err.message}`);
     }
-
     sock = null;
     log.info("✅ Socket destroyed");
   }
 
-  // ---------------------------------------------------------------------------
-  // RECONNECT SCHEDULER — replaces the inline setTimeout in connection.update
-  // Using a dedicated scheduler prevents double-reconnect races when close
-  // fires multiple times (e.g. timeout + stream error in quick succession).
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // RECONNECT
+  // ===========================================================================
 
   function scheduleReconnect(reason) {
     if (isShuttingDown) {
-      log.info("⚠️  Shutdown in progress, skipping reconnect");
+      log.info("⚠️  Shutdown in progress — skipping reconnect");
       return;
     }
-
-    // Cancel any pending reconnect timer
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
 
-    const delay = Math.min(
-      BAILEYS.BACKOFF_BASE_MS * Math.pow(2, reconnectAttempts),
-      BAILEYS.BACKOFF_CAP_MS
-    );
+    const BACKOFF_BASE = 3_000;
+    const BACKOFF_CAP  = 60_000;
+    const MAX_ATTEMPTS = 10;
+
+    const delay = Math.min(BACKOFF_BASE * Math.pow(2, reconnectAttempts), BACKOFF_CAP);
     reconnectAttempts++;
 
-    if (reconnectAttempts > BAILEYS.MAX_RECONNECT_ATTEMPTS) {
-      log.error("❌ Max reconnect attempts reached — exiting for PM2 restart");
+    if (reconnectAttempts > MAX_ATTEMPTS) {
+      log.error("❌ Max reconnect attempts reached — exiting");
       process.exit(1);
     }
 
-    log.info(
-      `🔄 Reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/${BAILEYS.MAX_RECONNECT_ATTEMPTS}) [${reason}]`
-    );
-
+    log.info(`🔄 Reconnect in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/${MAX_ATTEMPTS}) [${reason}]`);
     reconnectTimer = setTimeout(async () => {
       reconnectTimer = null;
       await connectToWhatsApp();
     }, delay);
   }
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // BAILEYS CONNECTION
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
 
   async function connectToWhatsApp() {
-    // ✅ FIX #2: Guard against concurrent connection attempts
     if (isConnecting) {
-      log.warn("⚠️  connectToWhatsApp already in progress, skipping");
+      log.warn("⚠️  Already connecting — skipped");
       return;
     }
     isConnecting = true;
 
-    // ✅ FIX #2: Destroy any existing socket before creating a new one
-    if (sock) {
-      destroySocket("reconnect — destroying old socket");
-    }
+    if (sock) destroySocket("reconnect");
 
     try {
-      // ✅ FIX #1: Load auth ONCE and store in closure.
-      // Re-loading on every reconnect corrupts the signal session and causes
-      // the Bad MAC / decrypt error loop that Bot-1 was experiencing.
+      // ── Auth ONCE (key stability fix) ──
       if (!authState) {
         log.info("🔐 Loading auth state (ONCE per process)...");
-        const result = await useMultiFileAuthState(authDir);
-        authState = result.state;
-        saveCreds = result.saveCreds;
-        log.info("✅ Auth state loaded and locked in closure");
+        const { state, saveCreds: sc } = await useMultiFileAuthState(authDir);
+        authState = state;
+        saveCreds = sc;
+        log.info("✅ Auth loaded and locked in closure");
       }
 
       const { version } = await fetchLatestBaileysVersion();
+      log.info(`📦 Baileys version: ${version.join(".")}`);
 
-      log.info(
-        `🔌 Connecting... (attempt ${reconnectAttempts + 1}/${BAILEYS.MAX_RECONNECT_ATTEMPTS})`
-      );
-
+      // Suppress crypto noise (normal for large groups)
       const baileysLogger = pino({
         level: "warn",
         hooks: {
@@ -539,13 +476,12 @@ trackReplayId(msgId);
             if (
               typeof msg === "string" &&
               (msg.includes("closing session") ||
-                msg.includes("decrypt") ||
-                msg.includes("bad mac") ||
-                msg.includes("failed to decrypt") ||
-                msg.includes("InvalidMessageException") ||
-                msg.includes("No session found"))
+               msg.includes("decrypt") ||
+               msg.includes("bad mac") ||
+               msg.includes("failed to decrypt") ||
+               msg.includes("InvalidMessageException") ||
+               msg.includes("No session found"))
             ) {
-              // Count silently rather than spamming logs
               stats.cryptoErrors++;
               return;
             }
@@ -560,69 +496,71 @@ trackReplayId(msgId);
           creds: authState.creds,
           keys: makeCacheableSignalKeyStore(authState.keys, baileysLogger),
         },
-        logger: baileysLogger,
-        printQRInTerminal: true,
-        browser: ["Taxi Bot", "Chrome", "120.0"],
-        markOnlineOnConnect: false,
-        syncFullHistory: false,
-        getMessage: async () => undefined,
-        defaultQueryTimeoutMs: BAILEYS.QUERY_TIMEOUT_MS,
-        connectTimeoutMs: BAILEYS.CONNECT_TIMEOUT_MS,
-        keepAliveIntervalMs: BAILEYS.KEEP_ALIVE_MS,
+        logger:               baileysLogger,
+        printQRInTerminal:    false,        // QR served via HTTP — no terminal spam
+        browser:              ["Taxi Bot", "Chrome", "120.0"],
+        markOnlineOnConnect:  false,
+        syncFullHistory:      false,
+        getMessage:           async () => undefined,
+        defaultQueryTimeoutMs: 60_000,
+        connectTimeoutMs:      60_000,
+        keepAliveIntervalMs:   30_000,
       });
 
-      // ✅ FIX #1: saveCreds now uses the closure-stored function
+      log.info("✅ Socket created");
+
+      // creds.update
       sock.ev.on("creds.update", async () => {
         if (saveCreds) await saveCreds();
       });
 
+      // connection.update
       sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-          log.info("📱 QR Code generated — scan with WhatsApp");
-          const qrcodeTerminal = (await import("qrcode-terminal")).default;
-          qrcodeTerminal.generate(qr, { small: true });
+          latestQR     = qr;
+          qrTimestamp  = Date.now();
+          log.info("📱 QR ready — scan at /qr or /qr-scanner.html");
+
+          // Also print to terminal as fallback
+          try {
+            const qrcodeTerminal = (await import("qrcode-terminal")).default;
+            qrcodeTerminal.generate(qr, { small: true });
+          } catch (_) { /* optional dep */ }
         }
 
         if (connection === "open") {
+          latestQR        = null;
+          qrTimestamp     = null;
+          reconnectAttempts = 0;
+          lastReconnectTime = Date.now();
+          needsSettlingDelay = true;
+
           log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
           log.info("✅ WhatsApp connected");
           log.info(`📱 Connected as: ${sock.user?.id || "unknown"}`);
           log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-          reconnectAttempts = 0;
-          lastReconnectTime = Date.now();
-          needsSettlingDelay = true;
-
           if (!botFullyOperational) {
             botFullyOperational = true;
-
             log.info("🎉 BOT FULLY OPERATIONAL");
             log.info(`   📍 Source groups:  ${config.sourceGroupIds.length}`);
-            log.info(
-              `   🆓 Free common:   ${config.freeCommonGroupId.substring(0, 20)}...`
-            );
-            log.info(
-              `   💎 Paid groups:   ${Array.isArray(config.paidCommonGroupId) ? config.paidCommonGroupId.length : 1}`
-            );
-            log.info(
-              `   🏙️  City groups:   ${config.configuredCities.length} (${config.configuredCities.join(", ")})`
-            );
-            log.info(
-              `   🚫 Blocked nums:  ${config.blockedPhoneNumbers.length}`
-            );
+            log.info(`   🆓 Free common:   ${config.freeCommonGroupId.substring(0, 20)}...`);
+            log.info(`   💎 Paid groups:   ${config.paidCommonGroupId.length}`);
+            log.info(`   🏙️  City groups:   ${config.configuredCities.length} (${config.configuredCities.join(", ")})`);
+            log.info(`   🚫 Blocked nums:  ${config.blockedPhoneNumbers.length}`);
             log.info(`   ⏰ Max msg age:   ${MAX_MESSAGE_AGE / 1000}s`);
             log.info(`   ⏱️  Process delay: ${PROCESSING_DELAY_MIN / 1000}-${PROCESSING_DELAY_MAX / 1000}s`);
             log.info(`   ⚡ Race prevention: ACTIVE`);
-            log.info(`   📂 Fingerprint file: ${BOT_FINGERPRINT_FILENAME}`);
+            log.info(`   📂 Fingerprint file: ${NEW_FP_FILENAME}`);
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
           }
         }
 
         if (connection === "close") {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
-          const errorMsg = lastDisconnect?.error?.message || "";
+          const errorMsg   = lastDisconnect?.error?.message || "";
 
           log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
           log.warn(`⚠️  CONNECTION CLOSED`);
@@ -630,36 +568,25 @@ trackReplayId(msgId);
           log.warn(`   Error:  ${errorMsg || "none"}`);
           log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-          // ✅ FIX #2: Always destroy the dead socket immediately on close
           destroySocket("connection closed");
 
-          // Hard exit on logged-out
+          // Hard exit on unrecoverable states — PM2 will restart cleanly
           if (statusCode === DisconnectReason.loggedOut) {
-            log.error("❌ LOGGED OUT — delete baileys_auth/ and restart to re-scan QR");
+            log.error("❌ LOGGED OUT — delete baileys_auth/ and restart");
             process.exit(1);
           }
 
-          // ✅ FIX #3: Hard exit on corrupted signal state.
-          // A corrupted session will NEVER self-heal — it will loop Bad MAC
-          // errors forever. Exit cleanly and let PM2 restart with a fresh state.
           if (
             errorMsg.includes("Bad MAC") ||
-            errorMsg.includes("No session found")
+            errorMsg.includes("No session found") ||
+            errorMsg.includes("Decryption error")
           ) {
-            log.error("❌ SIGNAL STATE CORRUPTED — exiting for PM2 restart");
-            isConnecting = false;
+            log.error("❌ Crypto session unrecoverable — exiting for clean restart");
             process.exit(1);
           }
 
-          // ✅ FIX #4: Aggressive backoff on crypto errors so we don't hammer
-          // WhatsApp with rapid reconnect attempts during a crypto issue.
-          if (
-            errorMsg.includes("Bad MAC") ||
-            errorMsg.includes("prekey") ||
-            errorMsg.includes("Decryption error") ||
-            statusCode === 440
-          ) {
-            log.warn("⚠️  Crypto error — applying extended backoff");
+          // Aggressive backoff for crypto errors (statusCode 440)
+          if (statusCode === 440) {
             reconnectAttempts = Math.max(reconnectAttempts, 2);
           }
 
@@ -668,356 +595,269 @@ trackReplayId(msgId);
         }
       });
 
+      // messages.upsert
       sock.ev.on("messages.upsert", async ({ messages, type }) => {
         if (type !== "notify") return;
-
         for (const msg of messages) {
           try {
             await handleMessage(msg);
           } catch (err) {
-            log.error(`❌ Error handling message: ${err.message}`);
+            log.error(`❌ handleMessage error: ${err.message}`);
           }
         }
       });
+
     } catch (err) {
       log.error(`❌ Connection error: ${err.message}`);
       scheduleReconnect("connection error");
     } finally {
-      // ✅ FIX #2: Always release the guard so the next attempt can proceed
       isConnecting = false;
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // STATS SERVER — unchanged
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // STATS / HTTP SERVER
+  // ===========================================================================
 
   function startStatsServer() {
-    const statsPort = parseInt(process.env.STATS_PORT || STATS.DEFAULT_PORT, 10);
+    const statsPort = parseInt(
+      process.env.STATS_PORT || process.env.QR_SERVER_PORT || "3001",
+      10
+    );
     const app = express();
+    app.use(express.static("public"));
 
-    app.use((req, res, next) => {
-      res.setTimeout(10000, () => {
-        log.warn(`⏱️  Request timeout: ${req.path}`);
-        res.status(408).json({ error: "Request timeout" });
-      });
-      next();
-    });
-
+    // Ping
     app.get("/ping", (_, res) => res.send("ALIVE"));
 
+    // Health
     app.get("/health", (_, res) => {
-      const healthy =
-        botFullyOperational &&
-        !circuitBreaker.isOpen &&
-        sock?.user;
-
-      const failureRate =
-        stats.sendSuccesses + stats.sendFailures > 0
-          ? stats.sendFailures / (stats.sendSuccesses + stats.sendFailures)
-          : 0;
+      const healthy    = botFullyOperational && !!sock?.user;
+      const total      = stats.sendSuccesses + stats.sendFailures;
+      const failureRate = total > 0 ? (stats.sendFailures / total).toFixed(3) : "0.000";
 
       res.status(healthy ? 200 : 503).json({
-        status: healthy ? "healthy" : "degraded",
-        uptime: Date.now() - BOT_START_TIME,
-        connected: botFullyOperational,
-        circuitBreakerOpen: circuitBreaker.isOpen,
-        reconnects: stats.reconnectCount,
-        cryptoErrors: stats.cryptoErrors,
-        failures: stats.sendFailures,
-        successes: stats.sendSuccesses,
-        failureRate: failureRate.toFixed(3),
+        status:       healthy ? "healthy" : "degraded",
+        uptime:       Date.now() - BOT_START_TIME,
+        connected:    botFullyOperational,
+        reconnects:   stats.reconnectCount,
+        failures:     stats.sendFailures,
+        successes:    stats.sendSuccesses,
+        failureRate,
         lastReconnect: lastReconnectTime
           ? new Date(lastReconnectTime).toISOString()
           : null,
       });
     });
 
+    // Stats
     app.get("/stats", (_, res) => {
       res.json({
         bot: {
-          id: config.botId,
-          phone: config.botPhone,
+          name:  process.env.BOT_NAME || "unknown",
+          phone: config.botPhone || "unknown",
         },
-        uptime:
-          ((Date.now() - BOT_START_TIME) / 1000 / 60).toFixed(1) + " minutes",
+        uptime:      ((Date.now() - BOT_START_TIME) / 60_000).toFixed(1) + " minutes",
         operational: botFullyOperational,
+        qrAvailable: !!latestQR,
         stats,
-        messageCount,
         cache: {
-          fingerprintSet: fingerprintSet.size,
+          fingerprintSet:      fingerprintSet.size,
           pendingFingerprints: pendingFingerprints.size,
-          replayIdSet: replayIdSet.size,
-          dirty: fingerprintDirty,
-          isSaving: isSaving,
-          fingerprintFile: BOT_FINGERPRINT_FILENAME,
-        },
-        circuitBreaker: {
-          isOpen: circuitBreaker.isOpen,
-          failureCount: circuitBreaker.failureCount,
+          replayIdSet:         replayIdSet.size,
+          dirty:               fingerprintDirty,
+          fingerprintFile:     NEW_FP_FILENAME,
         },
         reconnect: {
-          lastReconnectTime: lastReconnectTime
+          lastReconnect: lastReconnectTime
             ? new Date(lastReconnectTime).toISOString()
             : null,
           totalReconnects: stats.reconnectCount,
         },
         config: {
-          sourceGroupCount: config.sourceGroupIds.length,
-          paidGroupCount: Array.isArray(config.paidCommonGroupId)
-            ? config.paidCommonGroupId.length
-            : 1,
-          cityGroups: config.configuredCities,
-          blockedNumbers: config.blockedPhoneNumbers.length,
-          hourlyLimit: RATE_LIMITS.HOURLY,
-          dailyLimit: RATE_LIMITS.DAILY,
-        },
-        enhancements: {
-          maxMessageAge: `${MAX_MESSAGE_AGE / 1000}s`,
-          processingDelay: `${PROCESSING_DELAY_MIN / 1000}-${PROCESSING_DELAY_MAX / 1000}s`,
-          stableFingerprintFile: true,
+          sourceGroups:     config.sourceGroupIds.length,
+          paidGroups:       config.paidCommonGroupId.length,
+          cityGroups:       config.configuredCities.length,
+          freeCommonGroup:  config.freeCommonGroupId,
+          configuredCities: config.configuredCities,
         },
       });
     });
 
+    // Groups — enriched with full metadata + Bot-1 path categorisation
     app.get("/groups", async (req, res) => {
       if (!sock || !botFullyOperational) {
-        return res.status(503).json({
-          error: "Bot not connected to WhatsApp",
-          operational: botFullyOperational,
-        });
+        return res.status(503).json({ error: "Bot not connected", operational: botFullyOperational });
       }
-
       try {
-        log.info("📋 Fetching group list (non-blocking)...");
-
         const groupChats = await sock.groupFetchAllParticipating();
-        const allGroupIds = Object.keys(groupChats);
+        const allGroups  = Object.values(groupChats).map((chat) => ({
+          id:               chat.id,
+          name:             chat.subject || "Unknown Group",
+          participantCount: chat.participants?.length || 0,
+          createdAt:        chat.creation
+            ? new Date(chat.creation * 1000).toISOString()
+            : null,
+          description:      chat.desc || null,
+          owner:            chat.owner || null,
+        }));
 
-        log.info(`📋 Found ${allGroupIds.length} groups`);
-
-        const allGroups = [];
-        const BATCH_SIZE = 20;
-        const BATCH_DELAY = 100;
-
-        for (let i = 0; i < allGroupIds.length; i += BATCH_SIZE) {
-          const batch = allGroupIds.slice(i, i + BATCH_SIZE);
-
-          const batchPromises = batch.map(async (groupId) => {
-            try {
-              let groupName = groupChats[groupId]?.subject || null;
-              let participantsCount = groupChats[groupId]?.participants?.length || 0;
-              let createdAt = groupChats[groupId]?.creation
-                ? new Date(groupChats[groupId].creation * 1000).toISOString()
-                : null;
-
-              if (!groupName || groupName === "Unknown") {
-                try {
-                  const metadata = await Promise.race([
-                    sock.groupMetadata(groupId),
-                    new Promise((_, reject) =>
-                      setTimeout(() => reject(new Error("Metadata timeout")), 2000)
-                    ),
-                  ]);
-                  groupName = metadata.subject || "Unknown Group";
-                  participantsCount = metadata.participants?.length || 0;
-                  createdAt = metadata.creation
-                    ? new Date(metadata.creation * 1000).toISOString()
-                    : null;
-                } catch (fetchErr) {
-                  groupName = groupName || `Group ${groupId.substring(0, 8)}...`;
-                }
-              }
-
-              return {
-                id: groupId,
-                name: groupName,
-                participantsCount,
-                createdAt,
-              };
-            } catch (err) {
-              return null;
-            }
-          });
-
-          const batchResults = await Promise.all(batchPromises);
-          allGroups.push(...batchResults.filter(Boolean));
-
-          if (i + BATCH_SIZE < allGroupIds.length) {
-            await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY));
-          }
-        }
-
-        log.info(`✅ Processed ${allGroups.length}/${allGroupIds.length} groups`);
-
-        const sourceSet = new Set(config.sourceGroupIds);
-        const paidSet = new Set(
-          Array.isArray(config.paidCommonGroupId)
-            ? config.paidCommonGroupId
-            : [config.paidCommonGroupId]
-        );
-        const citySet = new Set(Object.values(config.cityTargetGroups || {}));
-        const freeSet = new Set(
-          config.freeCommonGroupId ? [config.freeCommonGroupId] : []
+        // Build lookup sets
+        const sourceSet  = new Set(config.sourceGroupIds);
+        const paidSet    = new Set(config.paidCommonGroupId);
+        const cityMap    = new Map(Object.entries(config.cityTargetGroups)); // groupId → city
+        const cityRevMap = new Map(
+          Object.entries(config.cityTargetGroups).map(([city, gid]) => [gid, city])
         );
 
-        const categorized = allGroups.map((g) => {
-          let type = "other";
-          let category = "Unmonitored";
+        const categorized = allGroups.map((group) => {
+          let category = "other";
+          let label    = "Unmonitored";
+          let meta     = null;
 
-          if (sourceSet.has(g.id)) {
-            type = "source";
-            category = "Source Group";
-          } else if (paidSet.has(g.id)) {
-            type = "paid";
-            category = "Paid Group";
-          } else if (citySet.has(g.id)) {
-            const cityName = Object.keys(config.cityTargetGroups).find(
-              (city) => config.cityTargetGroups[city] === g.id
-            );
-            type = "city";
-            category = `City Group${cityName ? `: ${cityName}` : ""}`;
-          } else if (freeSet.has(g.id)) {
-            type = "free_common";
-            category = "Free Common Group";
+          if (sourceSet.has(group.id)) {
+            category = "source";
+            label    = "Source Group (Path A)";
+          } else if (group.id === config.freeCommonGroupId) {
+            category = "free_common";
+            label    = "Free Common (Path A dest + Path B source)";
+          } else if (paidSet.has(group.id)) {
+            category = "paid";
+            label    = "Paid Common";
+          } else if (cityRevMap.has(group.id)) {
+            category = "city";
+            label    = `City: ${cityRevMap.get(group.id)}`;
+            meta     = { city: cityRevMap.get(group.id) };
           }
 
-          return { ...g, type, category };
+          return { ...group, category, label, meta };
         });
 
-        const sortOrder = {
-          source: 1,
-          free_common: 2,
-          paid: 3,
-          city: 4,
-          other: 5,
-        };
-
+        // Sort: source → paid → city → free_common → other
+        const sortOrder = { source: 1, paid: 2, city: 3, free_common: 4, other: 5 };
         categorized.sort((a, b) => {
-          const orderA = sortOrder[a.type] || 99;
-          const orderB = sortOrder[b.type] || 99;
-          if (orderA !== orderB) return orderA - orderB;
+          const oa = sortOrder[a.category] || 9;
+          const ob = sortOrder[b.category] || 9;
+          if (oa !== ob) return oa - ob;
           return (a.name || "").localeCompare(b.name || "");
         });
 
         res.json({
           success: true,
-          bot: config.botId,
-          connectedAs: sock.user?.id || "Unknown",
+          bot: {
+            name:  process.env.BOT_NAME || "unknown",
+            phone: sock.user?.id || "unknown",
+          },
           totalGroups: categorized.length,
           breakdown: {
-            source: categorized.filter((g) => g.type === "source").length,
-            freeCommon: categorized.filter((g) => g.type === "free_common").length,
-            paid: categorized.filter((g) => g.type === "paid").length,
-            city: categorized.filter((g) => g.type === "city").length,
-            unmonitored: categorized.filter((g) => g.type === "other").length,
+            source:     categorized.filter((g) => g.category === "source").length,
+            paid:       categorized.filter((g) => g.category === "paid").length,
+            city:       categorized.filter((g) => g.category === "city").length,
+            freeCommon: categorized.filter((g) => g.category === "free_common").length,
+            unmonitored: categorized.filter((g) => g.category === "other").length,
+          },
+          routing: {
+            pathA: "source group → paid[] + city + free",
+            pathB: "freeCommon → paid[] + city",
+            cities: config.configuredCities,
           },
           groups: categorized,
         });
       } catch (err) {
         log.error(`❌ /groups error: ${err.message}`);
-        res.status(500).json({
-          success: false,
-          error: err.message,
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    // QR PNG
+    app.get("/qr", async (req, res) => {
+      if (!latestQR) {
+        return res.status(404).send("QR not available. Bot may already be connected.");
+      }
+      if (Date.now() - (qrTimestamp || 0) > 20_000) {
+        return res.status(410).send("QR expired. Wait for a new one (~20s).");
+      }
+      try {
+        const buf = await QRCode.toBuffer(latestQR, {
+          type: "png", width: 400, margin: 2,
+          color: { dark: "#000000", light: "#FFFFFF" },
         });
+        res.type("png").send(buf);
+      } catch (err) {
+        res.status(500).send("QR generation failed");
+      }
+    });
+
+    // QR base64
+    app.get("/qr/base64", async (req, res) => {
+      if (!latestQR) {
+        return res.status(404).json({ error: "QR not available", qrAvailable: false });
+      }
+      if (Date.now() - (qrTimestamp || 0) > 20_000) {
+        return res.status(410).json({ error: "QR expired", qrAvailable: false });
+      }
+      try {
+        const dataURL = await QRCode.toDataURL(latestQR, { width: 400, margin: 2 });
+        res.json({ qr: dataURL, qrAvailable: true, timestamp: qrTimestamp });
+      } catch (err) {
+        res.status(500).json({ error: "QR generation failed" });
       }
     });
 
     app.listen(statsPort, "0.0.0.0", () => {
-      log.info(`📊 Stats server: http://0.0.0.0:${statsPort}/stats`);
-      log.info(`💚 Health check: http://0.0.0.0:${statsPort}/health`);
-      log.info(`👥 Groups API: http://0.0.0.0:${statsPort}/groups`);
+      log.info(`📊 Stats:   http://0.0.0.0:${statsPort}/stats`);
+      log.info(`💚 Health:  http://0.0.0.0:${statsPort}/health`);
+      log.info(`📱 QR:      http://0.0.0.0:${statsPort}/qr`);
+      log.info(`👥 Groups:  http://0.0.0.0:${statsPort}/groups`);
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // CLEANUP INTERVALS
-  // ---------------------------------------------------------------------------
-
-  setInterval(() => {
-    const now = Date.now();
-    for (const [groupId, timestamp] of inFlightSends.entries()) {
-      if (now - timestamp > 30000) {
-        inFlightSends.delete(groupId);
-      }
-    }
-  }, SEND_COOLDOWN_CLEANUP_INTERVAL);
-
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // GRACEFUL SHUTDOWN
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
 
   async function gracefulShutdown(signal) {
-    log.info(`👋 ${signal} received — shutting down gracefully`);
+    log.info(`👋 ${signal} — shutting down`);
     isShuttingDown = true;
 
-    // Cancel any pending reconnect
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
+    if (reconnectTimer)    { clearTimeout(reconnectTimer);  reconnectTimer   = null; }
+    if (saveDebounceTimer) { clearTimeout(saveDebounceTimer); saveDebounceTimer = null; }
 
-    await saveFingerprints();
-
-    if (saveDebounceTimer) {
-      clearTimeout(saveDebounceTimer);
-      saveDebounceTimer = null;
-    }
-
-    if (circuitBreaker.resetTimeout) {
-      clearTimeout(circuitBreaker.resetTimeout);
-    }
-
-    // ✅ FIX #2: Use destroySocket for consistent teardown on shutdown too
-    destroySocket("graceful shutdown");
+    saveFingerprints();
+    destroySocket("shutdown");
 
     log.info("📊 Final stats:");
-    log.info(`   Messages:    ${stats.totalMessagesSent}`);
-    log.info(`   Path A:      ${stats.pathAProcessed}`);
-    log.info(`   Path B:      ${stats.pathBProcessed}`);
+    log.info(`   Processed:   ${stats.totalProcessed}`);
+    log.info(`   Path A:      ${stats.pathARouted}`);
+    log.info(`   Path B:      ${stats.pathBRouted}`);
     log.info(`   Duplicates:  ${stats.duplicatesSkipped}`);
     log.info(`   Too old:     ${stats.rejectedTooOld}`);
     log.info(`   Races:       ${stats.racePrevented} (prevented)`);
-    log.info(`   Replays:     ${stats.replayIdsSkipped}`);
-    log.info(`   Crypto errs: ${stats.cryptoErrors}`);
+    log.info(`   Crypto:      ${stats.cryptoErrors} (normal)`);
     log.info(`   Reconnects:  ${stats.reconnectCount}`);
     log.info(`   Sends OK:    ${stats.sendSuccesses}`);
     log.info(`   Sends FAIL:  ${stats.sendFailures}`);
 
+    log.info("✅ Shutdown complete");
     process.exit(0);
   }
 
-  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  process.on("SIGINT",  () => gracefulShutdown("SIGINT"));
   process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-  process.on("SIGHUP", () => {
-    log.info("🔄 SIGHUP (PM2 reload) — cleaning up timers");
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    if (saveDebounceTimer) {
-      clearTimeout(saveDebounceTimer);
-      saveDebounceTimer = null;
-    }
-    if (circuitBreaker.resetTimeout) {
-      clearTimeout(circuitBreaker.resetTimeout);
-    }
-  });
+  process.on("SIGHUP",  () => gracefulShutdown("SIGHUP"));
 
-  // ---------------------------------------------------------------------------
-  // BOOT SEQUENCE
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // BOOT
+  // ===========================================================================
 
   log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  log.info("🚀 TAXI BOT STARTING (ENHANCED)");
-  log.info("   ✅ Message age validation (5min max)");
-  log.info("   ✅ Stable fingerprint filename");
-  log.info("   ✅ Processing delay randomization");
-  log.info("   ✅ /health endpoint added");
-  log.info("   ✅ Auth loaded once (FIX #1)");
-  log.info("   ✅ Explicit socket teardown (FIX #2)");
-  log.info("   ✅ Hard exit on Bad MAC (FIX #3)");
-  log.info("   ✅ Aggressive crypto backoff (FIX #4)");
+  log.info("🚀 TAXI BOT v3 STARTING (Path A/B + Bot-2 Stability)");
+  log.info("   ✅ Auth-once (Bad MAC fix)");
+  log.info("   ✅ QR via HTTP (/qr)");
+  log.info("   ✅ 5-min message age gate");
+  log.info("   ✅ Processing delay 2-7s");
+  log.info("   ✅ Stale fingerprint cleanup");
+  log.info("   ✅ /health endpoint");
   log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   loadFingerprints();

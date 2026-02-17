@@ -1,55 +1,47 @@
+#!/usr/bin/env node
 // =============================================================================
-// bots/bot-admin/start.js — PM2 entry point for bot-admin.
-// This file owns ONLY: .env loading, path resolution, wiring.
-// All logic lives in core/.
+// start.js — PM2 Entry Point (Bot-2 pattern)
 // =============================================================================
 
-import path            from 'path';
-import { fileURLToPath } from 'url';
-import dotenv          from 'dotenv';
+import path from "path";
+import { fileURLToPath } from "url";
+import { loadConfig } from "../../core/configLoader.js";
+import { startBot   } from "../../core/index.js";
+import { createLogger } from "../../core/logger.js";
 
-// ---------------------------------------------------------------------------
-// PATH RESOLUTION — everything relative to THIS file, not process.cwd().
-// PM2 sets cwd to this folder (ecosystem.config.cjs), but we resolve via
-// __filename so the file works correctly even if run manually from elsewhere.
-// ---------------------------------------------------------------------------
-const __filename  = fileURLToPath(import.meta.url);
-const BOT_DIR     = path.dirname(__filename);                   // bots/bot-admin/
-const PROJECT_ROOT = path.resolve(BOT_DIR, '..', '..');         // whatsapp-admin-bot-multibot/
-const CONFIG_PATH = path.join(BOT_DIR, 'config.json');          // bots/bot-admin/config.json
-const AUTH_DIR    = path.join(BOT_DIR, 'baileys_auth');         // bots/bot-admin/baileys_auth/
+// Path resolution
+const __filename = fileURLToPath(import.meta.url);
+const BOT_DIR    = path.dirname(__filename);
+const AUTH_DIR   = path.join(BOT_DIR, "baileys_auth");
 
-// ---------------------------------------------------------------------------
-// .env — load BEFORE anything reads process.env (STATS_PORT lives here)
-// ---------------------------------------------------------------------------
-dotenv.config({ path: path.join(BOT_DIR, '.env') });
+// Bot identity
+const BOT_NAME = process.env.BOT_NAME || path.basename(BOT_DIR);
 
-// ---------------------------------------------------------------------------
-// BOT IDENTITY
-// ---------------------------------------------------------------------------
-const BOT_ID = 'bot-admin';
+const log = createLogger(BOT_NAME);
 
-// ---------------------------------------------------------------------------
-// DYNAMIC IMPORTS — resolved via PROJECT_ROOT so they work no matter what
-// cwd PM2 has set.  Top-level await is fine — Node 18+ with "type":"module".
-// ---------------------------------------------------------------------------
-const { createLogger } = await import(path.join(PROJECT_ROOT, 'core', 'logger.js'));
-const { loadConfig }   = await import(path.join(PROJECT_ROOT, 'core', 'configLoader.js'));
-const { startBot }     = await import(path.join(PROJECT_ROOT, 'core', 'index.js'));
+log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+log.info(`🟢 ${BOT_NAME} — entry point`);
+log.info(`   Bot Dir : ${BOT_DIR}`);
+log.info(`   Auth Dir: ${AUTH_DIR}`);
+log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-// ---------------------------------------------------------------------------
-// BOOT
-// ---------------------------------------------------------------------------
-const log = createLogger(BOT_ID);
+// Load + validate (throws → PM2 restarts)
+const { config, ENV } = loadConfig(BOT_DIR);
 
-log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-log.info(`🟢 ${BOT_ID} — entry point`);
-log.info(`   Config : ${CONFIG_PATH}`);
-log.info(`   Auth   : ${AUTH_DIR}`);
-log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+// Required by index.js fingerprint naming
+config.botDir = BOT_DIR;
 
-// Load + validate merged config — throws on any problem, PM2 restarts
-const config = loadConfig(CONFIG_PATH, BOT_ID, log);
+log.info("🛡️  Anti-ban protection: ACTIVE");
+log.info("   • B1: Reconnect age gate (30s window)");
+log.info("   • B2: Replay ID dedup (200 rolling)");
+log.info("   • C1: Batch fingerprint cleanup");
+log.info("   • C2: Debounced disk writes (30s)");
+log.info("   • A4: Settling delay (5-15s)");
+log.info("   • A1: Length-scaled typing (1.0-1.8s)");
+log.info("   • A5: Weighted gaps (0.8-1.5s)");
+log.info("   • A3: Fisher-Yates shuffle");
+log.info("   • Circuit breaker (10 fails → 60s)");
+log.info("   • Per-group cooldown (1s)");
 
-// Hand off to the main event loop (never returns)
+// Hand off — never returns
 await startBot(config, log, AUTH_DIR);

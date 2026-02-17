@@ -1,216 +1,195 @@
-// =============================================================================
-// configLoader.js — Loads and validates per-bot config + shared globalConfig.
-// Called once at startup by start.js. Fails fast on any invalid config.
-// =============================================================================
+/**
+ * ============================================================================
+ * CONFIG LOADER
+ * ============================================================================
+ * Bot-2 loading pattern (ES module, internal .env load, process.exit on error)
+ * Bot-1 routing schema validated (botPhone, sourceGroupIds, freeCommonGroupId,
+ * paidCommonGroupId, cityTargetGroups).
+ * ============================================================================
+ */
 
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import dotenv from "dotenv";
+import { GLOBAL_CONFIG } from "./globalConfig.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-
-// -----------------------------------------------------------------------------
-// VALIDATION HELPERS (preserved from original src/config.js)
-// -----------------------------------------------------------------------------
-
-function isValidGroupId(id) {
-  if (typeof id !== 'string') return false;
-  return id.endsWith('@g.us') && id.length > 10;
-}
-
-function normalizeBlockedNumbers(raw) {
-  if (!raw) return [];
-  if (!Array.isArray(raw)) {
-    throw new Error('blockedPhoneNumbers must be an array');
-  }
-  return raw
-    .map(num => {
-      if (typeof num !== 'string') {
-        console.warn(`⚠️  Invalid blocked number (not a string): ${num}`);
-        return '';
-      }
-      return num.replace(/\s+/g, '');
-    })
-    .filter(num => num.length > 0);
-}
-
-// -----------------------------------------------------------------------------
-// LOAD SHARED GLOBAL CONFIG (keywords, ignore list, blocked numbers)
-// -----------------------------------------------------------------------------
-
-function loadGlobalConfig(log) {
-  const globalPath = path.join(__dirname, 'globalConfig.json');
-
-  if (!fs.existsSync(globalPath)) {
-    throw new Error(`Global config not found: ${globalPath}`);
+export function loadConfig(botDir) {
+  // Load .env from bot directory FIRST (Bot-2 pattern)
+  const envPath = path.join(botDir, ".env");
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
   }
 
-  let global;
+  const configPath = path.join(botDir, "config.json");
+
+  if (!fs.existsSync(configPath)) {
+    console.error(`❌ Config file not found: ${configPath}`);
+    process.exit(1);
+  }
+
+  let config;
   try {
-    global = JSON.parse(fs.readFileSync(globalPath, 'utf8'));
-  } catch (err) {
-    throw new Error(`Failed to parse globalConfig.json: ${err.message}`);
+    const configContent = fs.readFileSync(configPath, "utf8");
+    config = JSON.parse(configContent);
+  } catch (error) {
+    console.error(`❌ Failed to parse config.json: ${error.message}`);
+    process.exit(1);
   }
 
-  // Validate required global fields
-  const requiredGlobalFields = ['requestKeywords', 'ignoreIfContains', 'blockedPhoneNumbers'];
-  for (const field of requiredGlobalFields) {
-    if (!global[field]) {
-      throw new Error(`Missing required field in globalConfig.json: ${field}`);
-    }
-  }
+  // ==========================================================================
+  // VALIDATE REQUIRED FIELDS (Bot-1 fixed routing schema)
+  // ==========================================================================
 
-  if (!Array.isArray(global.requestKeywords)) {
-    throw new Error('requestKeywords in globalConfig.json must be an array');
-  }
-  if (!Array.isArray(global.ignoreIfContains)) {
-    throw new Error('ignoreIfContains in globalConfig.json must be an array');
-  }
-
-  // Normalize blocked numbers (strip spaces, filter empties)
-  global.blockedPhoneNumbers = normalizeBlockedNumbers(global.blockedPhoneNumbers);
-
-  return global;
-}
-
-// -----------------------------------------------------------------------------
-// LOAD PER-BOT CONFIG (sourceGroupIds, targets, botPhone)
-// -----------------------------------------------------------------------------
-
-function loadBotConfig(botConfigPath, log) {
-  if (!fs.existsSync(botConfigPath)) {
-    throw new Error(`Bot config not found: ${botConfigPath}`);
-  }
-
-  let bot;
-  try {
-    bot = JSON.parse(fs.readFileSync(botConfigPath, 'utf8'));
-  } catch (err) {
-    throw new Error(`Failed to parse bot config.json: ${err.message}`);
-  }
-
-  // Validate required per-bot fields
-  const requiredBotFields = [
-    'botPhone',
-    'sourceGroupIds',
-    'freeCommonGroupId',
-    'paidCommonGroupId',
-    'cityTargetGroups'
+  const requiredFields = [
+    "botPhone",
+    "sourceGroupIds",
+    "freeCommonGroupId",
+    "paidCommonGroupId",
+    "cityTargetGroups",
   ];
 
-  for (const field of requiredBotFields) {
-    if (!bot[field]) {
-      throw new Error(`Missing required field in bot config.json: ${field}`);
+  for (const field of requiredFields) {
+    if (config[field] === undefined || config[field] === null) {
+      console.error(`❌ Missing required config field: ${field}`);
+      process.exit(1);
     }
   }
 
   // Type checks
-  if (!Array.isArray(bot.sourceGroupIds)) {
-    throw new Error('sourceGroupIds must be an array');
-  }
-  if (typeof bot.botPhone !== 'string') {
-    throw new Error('botPhone must be a string');
-  }
-  if (!Array.isArray(bot.paidCommonGroupId) && typeof bot.paidCommonGroupId !== 'string') {
-    throw new Error('paidCommonGroupId must be an array or string');
-  }
-  if (typeof bot.cityTargetGroups !== 'object' || Array.isArray(bot.cityTargetGroups)) {
-    throw new Error('cityTargetGroups must be an object');
+  if (typeof config.botPhone !== "string" || config.botPhone.trim() === "") {
+    console.error(`❌ config.botPhone must be a non-empty string`);
+    process.exit(1);
   }
 
-  // Validate source group IDs format
-  const invalidSourceGroups = bot.sourceGroupIds.filter(id => !isValidGroupId(id));
+  if (!Array.isArray(config.sourceGroupIds)) {
+    console.error(`❌ config.sourceGroupIds must be an array`);
+    process.exit(1);
+  }
+
+  if (
+    typeof config.freeCommonGroupId !== "string" ||
+    !config.freeCommonGroupId.endsWith("@g.us")
+  ) {
+    console.error(`❌ config.freeCommonGroupId must be a valid @g.us group ID`);
+    process.exit(1);
+  }
+
+  if (!Array.isArray(config.paidCommonGroupId) || config.paidCommonGroupId.length === 0) {
+    console.error(`❌ config.paidCommonGroupId must be a non-empty array`);
+    process.exit(1);
+  }
+
+  if (
+    typeof config.cityTargetGroups !== "object" ||
+    Array.isArray(config.cityTargetGroups) ||
+    Object.keys(config.cityTargetGroups).length === 0
+  ) {
+    console.error(`❌ config.cityTargetGroups must be a non-empty object map`);
+    process.exit(1);
+  }
+
+  // ==========================================================================
+  // VALIDATE GROUP ID FORMATS
+  // ==========================================================================
+
+  function isValidGroupId(id) {
+    return typeof id === "string" && id.endsWith("@g.us") && id.length > 10;
+  }
+
+  const invalidSourceGroups = config.sourceGroupIds.filter((id) => !isValidGroupId(id));
   if (invalidSourceGroups.length > 0) {
-    throw new Error(`Invalid source group IDs: ${invalidSourceGroups.join(', ')}`);
+    console.error(`❌ Invalid source group IDs: ${invalidSourceGroups.join(", ")}`);
+    process.exit(1);
   }
 
-  // Validate freeCommonGroupId
-  if (!isValidGroupId(bot.freeCommonGroupId)) {
-    throw new Error(`Invalid freeCommonGroupId: ${bot.freeCommonGroupId}`);
-  }
-
-  // Validate paid group IDs
-  const paidGroups = Array.isArray(bot.paidCommonGroupId)
-    ? bot.paidCommonGroupId
-    : [bot.paidCommonGroupId];
-
-  const invalidPaidGroups = paidGroups.filter(id => !isValidGroupId(id));
+  const invalidPaidGroups = config.paidCommonGroupId.filter((id) => !isValidGroupId(id));
   if (invalidPaidGroups.length > 0) {
-    throw new Error(`Invalid paid group IDs: ${invalidPaidGroups.join(', ')}`);
+    console.error(`❌ Invalid paidCommonGroupId entries: ${invalidPaidGroups.join(", ")}`);
+    process.exit(1);
   }
 
-  // Validate city target group IDs
-  const invalidCityGroups = [];
-  for (const [city, groupId] of Object.entries(bot.cityTargetGroups)) {
-    if (groupId && groupId.trim() !== '' && !isValidGroupId(groupId)) {
-      invalidCityGroups.push(`${city}: ${groupId}`);
+  for (const [city, groupId] of Object.entries(config.cityTargetGroups)) {
+    if (!isValidGroupId(groupId)) {
+      console.error(`❌ Invalid group ID for city "${city}": ${groupId}`);
+      process.exit(1);
     }
   }
-  if (invalidCityGroups.length > 0) {
-    throw new Error(`Invalid city group IDs: ${invalidCityGroups.join(', ')}`);
-  }
 
-  return bot;
-}
+  // ==========================================================================
+  // DERIVE configuredCities list (keys of cityTargetGroups)
+  // ==========================================================================
 
-// -----------------------------------------------------------------------------
-// MAIN EXPORT — called once by start.js
-// -----------------------------------------------------------------------------
+  const configuredCities = Object.keys(config.cityTargetGroups);
 
-/**
- * Loads and validates both configs. Returns a single merged object.
- *
- * @param {string} botConfigPath   - absolute path to this bot's config.json
- * @param {string} botId           - e.g. "bot-1" (for log prefixing)
- * @param {{ info: Function }}  log - the bot logger instance
- * @returns {object}               - merged config
- */
-export function loadConfig(botConfigPath, botId, log) {
-  log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  log.info('📋 LOADING CONFIGURATION');
-  log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  // ==========================================================================
+  // MERGE WITH GLOBAL CONFIG (Bot-2 pattern)
+  // ==========================================================================
 
-  // Load both files — any error here is fatal
-  const globalCfg = loadGlobalConfig(log);
-  const botCfg    = loadBotConfig(botConfigPath, log);
-
-  // Merge into one flat config object
-  const config = {
-    // Per-bot
-    botPhone:           botCfg.botPhone,
-    botId:              botId,
-    sourceGroupIds:     botCfg.sourceGroupIds,
-    freeCommonGroupId:  botCfg.freeCommonGroupId,
-    paidCommonGroupId:  botCfg.paidCommonGroupId,
-    cityTargetGroups:   botCfg.cityTargetGroups,
-
-    // Global (shared)
-    requestKeywords:    globalCfg.requestKeywords,
-    ignoreIfContains:   globalCfg.ignoreIfContains,
-    blockedPhoneNumbers: globalCfg.blockedPhoneNumbers,
-
-    // Derived
-    configuredCities:   Object.keys(botCfg.cityTargetGroups),
+  const mergedConfig = {
+    ...config,
+    botDir,
+    configuredCities,
+    requestKeywords: GLOBAL_CONFIG.requestKeywords,
+    ignoreIfContains: GLOBAL_CONFIG.ignoreIfContains,
+    blockedPhoneNumbers: GLOBAL_CONFIG.blockedPhoneNumbers,
+    rateLimits: GLOBAL_CONFIG.rateLimits,
+    validation: GLOBAL_CONFIG.validation,
+    humanBehavior: GLOBAL_CONFIG.humanBehavior,
+    circuitBreaker: GLOBAL_CONFIG.circuitBreaker,
+    deduplication: GLOBAL_CONFIG.deduplication,
+    reconnect: GLOBAL_CONFIG.reconnect,
   };
 
-  // Log summary (preserved from original startup logging)
-  log.info(`✅ Source Groups:    ${config.sourceGroupIds.length}`);
-  log.info(`✅ Free Common:     1`);
-  log.info(`✅ Paid Groups:     ${Array.isArray(config.paidCommonGroupId) ? config.paidCommonGroupId.length : 1}`);
-  log.info(`✅ City Groups:     ${config.configuredCities.length}`);
-  log.info(`✅ Keywords:        ${config.requestKeywords.length}`);
-  log.info(`✅ Ignore Keywords: ${config.ignoreIfContains.length}`);
-  log.info(`✅ Blocked Numbers: ${config.blockedPhoneNumbers.length}`);
-  log.info(`✅ Bot Phone:       ${config.botPhone}`);
-  log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  // ==========================================================================
+  // ENVIRONMENT VARIABLES
+  // ==========================================================================
 
-  config.configuredCities.forEach(city => {
-    const gid = config.cityTargetGroups[city];
-    log.info(`   🏙️  ${city} → ${gid ? gid.substring(0, 18) + '...' : 'NO GROUP CONFIGURED'}`);
-  });
+  const ENV = {
+    BOT_NAME: process.env.BOT_NAME || path.basename(botDir),
+    STATS_PORT: parseInt(
+      process.env.STATS_PORT || process.env.QR_SERVER_PORT || "3001",
+      10
+    ),
+    BOT_DIR: botDir,
+    AUTH_DIR: path.join(botDir, "baileys_auth"),
+  };
 
-  log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  if (isNaN(ENV.STATS_PORT) || ENV.STATS_PORT < 1 || ENV.STATS_PORT > 65535) {
+    console.error(`❌ Invalid STATS_PORT: ${process.env.STATS_PORT}`);
+    process.exit(1);
+  }
 
-  return config;
+  // Create auth directory if it doesn't exist (Bot-2 convenience)
+  if (!fs.existsSync(ENV.AUTH_DIR)) {
+    fs.mkdirSync(ENV.AUTH_DIR, { recursive: true });
+  }
+
+  // ==========================================================================
+  // LOG CONFIGURATION SUMMARY
+  // ==========================================================================
+
+  const allTargetGroupIds = new Set([
+    ...mergedConfig.paidCommonGroupId,
+    mergedConfig.freeCommonGroupId,
+    ...Object.values(mergedConfig.cityTargetGroups),
+  ]);
+
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log(`📋 CONFIGURATION LOADED: ${ENV.BOT_NAME}`);
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log(`✅ Bot Phone:      ${mergedConfig.botPhone}`);
+  console.log(`✅ Source Groups:  ${mergedConfig.sourceGroupIds.length}`);
+  console.log(`✅ Free Common:    ${mergedConfig.freeCommonGroupId}`);
+  console.log(`✅ Paid Groups:    ${mergedConfig.paidCommonGroupId.length}`);
+  console.log(`✅ City Groups:    ${configuredCities.length} (${configuredCities.join(", ")})`);
+  console.log(`✅ Total Targets:  ${allTargetGroupIds.size} unique`);
+  console.log(`✅ Keywords:       ${mergedConfig.requestKeywords.length}`);
+  console.log(`✅ Ignore List:    ${mergedConfig.ignoreIfContains.length}`);
+  console.log(`✅ Blocked Nums:   ${mergedConfig.blockedPhoneNumbers.length}`);
+  console.log(`✅ Rate Limits:    ${mergedConfig.rateLimits.hourly}/hour, ${mergedConfig.rateLimits.daily}/day`);
+  console.log(`✅ Stats Port:     ${ENV.STATS_PORT}`);
+  console.log(`✅ Anti-Ban:       10-layer protection enabled`);
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+  return { config: mergedConfig, ENV };
 }
