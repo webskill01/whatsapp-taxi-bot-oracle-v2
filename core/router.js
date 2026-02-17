@@ -352,60 +352,39 @@ async function processPathB(sock, text, config, stats, log) {
 
 // =============================================================================
 // MAIN EXPORT — called from index.js handleMessage()
-// Returns { wasRouted: boolean, path: "A"|"B"|"none" }
+//
+// Receives pre-extracted text and path from index.js.
+// This eliminates the double message-parse and the silent-fail when
+// message.message is undefined/wrapped — which was causing messages to be
+// received but never forwarded.
+//
+// Signature: processMessage(sock, text, sourceGroup, isPathA, config, stats, log)
+// Returns:   { wasRouted: boolean, path: "A"|"B"|"none" }
 // =============================================================================
 
-export async function processMessage(sock, message, config, stats, log) {
+export async function processMessage(sock, text, sourceGroup, isPathA, config, stats, log) {
   try {
-    const messageType = Object.keys(message.message || {})[0];
-
-    // Skip protocol / signal messages
-    if (
-      messageType === "protocolMessage" ||
-      messageType === "senderKeyDistributionMessage" ||
-      messageType === "reactionMessage" ||
-      messageType === "messageContextInfo"
-    ) {
+    if (!text || text.trim() === "") {
+      log.warn(`⚠️  processMessage called with empty text — skipping`);
       return { wasRouted: false, path: "none" };
     }
 
-    const text =
-      message.message?.conversation ||
-      message.message?.extendedTextMessage?.text ||
-      message.message?.imageMessage?.caption ||
-      message.message?.videoMessage?.caption ||
-      "";
-
-    if (!text) return { wasRouted: false, path: "none" };
-
-    const sourceGroup = message.key.remoteJid;
-
-    // ── Determine path ──
-    const isPathA = config.sourceGroupIds.includes(sourceGroup);
-    const isPathB = sourceGroup === config.freeCommonGroupId;
+    log.info(`🔀 Router: Path ${isPathA ? "A" : "B"} | ${sourceGroup.substring(0, 18)}...`);
 
     if (isPathA) {
       const result = await processPathA(sock, text, sourceGroup, config, stats, log);
       return { ...result, path: "A" };
     }
 
-    if (isPathB) {
-      const result = await processPathB(sock, text, config, stats, log);
-      return { ...result, path: "B" };
-    }
-
-    // Neither path — shouldn't reach here (index.js filters first) but be safe
-    return { wasRouted: false, path: "none" };
+    // Path B — freeCommonGroup
+    const result = await processPathB(sock, text, config, stats, log);
+    return { ...result, path: "B" };
 
   } catch (error) {
-    log.error(`❌ Routing error: ${error.message}`);
-    if (error.message?.includes("Decryption error") || error.message?.includes("Bad MAC")) {
-      log.warn("⚠️  Crypto error in router (normal)");
-    }
+    log.error(`❌ Router error: ${error.message}`);
     return { wasRouted: false, path: "none" };
   }
 }
-
 // =============================================================================
 // CLEANUP — purge stale cooldown entries every 30s
 // =============================================================================

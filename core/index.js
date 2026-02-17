@@ -354,7 +354,7 @@ export async function startBot(config, log, authDir) {
 
     let routingResult;
     try {
-      routingResult = await processMessage(sock, msg, config, stats, log);
+      routingResult = await processMessage(sock, text, sourceGroup, isPathA, config, stats, log);
     } catch (err) {
       log.error(`❌ Routing error: ${err.message}`);
       routingResult = { wasRouted: false, path: "none" };
