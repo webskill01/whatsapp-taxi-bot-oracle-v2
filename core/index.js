@@ -1,26 +1,29 @@
 // =============================================================================
-// core/index.js — WhatsApp Bot Core
+// core/index.js — WhatsApp Bot Core (Bot-1 + all Bot-2 improvements merged)
 // =============================================================================
-// Bot-2 STABILITY ARCHITECTURE:
+// STABILITY:
 //   ✅ Auth state loaded ONCE (closure) — fixes Bad MAC death loop
 //   ✅ isConnecting guard — no concurrent socket creation
-//   ✅ Exponential backoff: 3s→6s→12s→24s→48s cap 60s
+//   ✅ Named listener removal on destroySocket (no ghost listeners)
+//   ✅ Exponential backoff: 3s→6s→12s→24s→48s cap 60s, max 10 attempts
 //   ✅ Hard exit on loggedOut / Bad MAC / No session (PM2 restarts cleanly)
+//   ✅ Prekey errors → extended backoff (not hard exit)
 //   ✅ B1: Reconnect age gate (30s window, 10s max msg age)
 //   ✅ B2: Replay ID dedup (rolling 200)
 //   ✅ A4: Settling delay (5-15s after connect)
-//   ✅ C1: Batch fingerprint cleanup on overflow
+//   ✅ C1: Batch fingerprint cleanup on overflow (trim to 80%)
 //   ✅ C2: Debounced disk write (30s)
-//   ✅ Stale pending fingerprint cleanup (60s timeout → purge)
-//   ✅ QR code HTTP endpoint (PNG + base64) for remote scanning
-//   ✅ /health endpoint for monitoring
-//   ✅ Enriched /groups endpoint with full metadata + path categorisation
+//   ✅ Stale pending fingerprint cleanup (60s timeout → purge, runs every 30s)
+//   ✅ QR code HTTP endpoint — dynamic import (won't crash if qrcode missing)
+//   ✅ QR also printed to terminal (fallback)
+//   ✅ /ping /health /stats /status /groups HTTP endpoints
 //   ✅ PM2 graceful shutdown (SIGINT / SIGTERM / SIGHUP)
-//   ✅ 5-minute message age gate
-//   ✅ Processing delay randomisation (2-7s)
-//   ✅ Stable per-bot fingerprint filename (botId + phone)
+//   ✅ 5-minute message age gate (logs rejection with age in seconds)
+//   ✅ Processing delay 2-7s (logged)
+//   ✅ Stable per-bot fingerprint filename (botId + phone, auto-migrates old)
+//   ✅ Verbose fingerprint lock/unlock logs
 //
-// Bot-1 ROUTING PRESERVED:
+// ROUTING (Bot-1):
 //   ✅ Path A: source group → paid[] + city + free
 //   ✅ Path B: freeCommonGroup → paid[] + city (no free echo)
 //   ✅ /groups shows source / paid / city / free_common / other
@@ -46,9 +49,9 @@ import { GLOBAL_CONFIG }         from "./globalConfig.js";
 // =============================================================================
 // CONSTANTS
 // =============================================================================
-const MAX_MESSAGE_AGE      = 5 * 60 * 1000;   // 5 minutes
-const PROCESSING_DELAY_MIN = 2_000;            // 2s
-const PROCESSING_DELAY_MAX = 7_000;            // 7s
+const MAX_MESSAGE_AGE      = 5 * 60 * 1000;  // 5 minutes
+const PROCESSING_DELAY_MIN = 2_000;           // 2s
+const PROCESSING_DELAY_MAX = 7_000;           // 7s
 
 // =============================================================================
 // MAIN EXPORT
@@ -71,13 +74,13 @@ export async function startBot(config, log, authDir) {
   let saveCreds = null;
 
   // QR code state for HTTP endpoint
-  let latestQR     = null;
-  let qrTimestamp  = null;
+  let latestQR    = null;
+  let qrTimestamp = null;
 
   // Deduplication
   const fingerprintSet      = new Set();
   const pendingFingerprints = new Map();  // optimistic lock
-  const replayIdSet         = new Set(); // B2
+  const replayIdSet         = new Set();  // B2
 
   // Stats
   const stats = {
@@ -112,13 +115,13 @@ export async function startBot(config, log, authDir) {
   let needsSettlingDelay = true;
 
   // C2 debounce
-  let fingerprintDirty    = false;
-  let saveDebounceTimer   = null;
+  let fingerprintDirty  = false;
+  let saveDebounceTimer = null;
 
   const BOT_START_TIME = Date.now();
 
   // ===========================================================================
-  // STABLE FINGERPRINT FILE (Bot-2: botId + phone → survives rename)
+  // STABLE FINGERPRINT FILE (botId + phone → survives rename)
   // ===========================================================================
 
   const BOT_ID = config.botId || path.basename(config.botDir || process.cwd());
@@ -142,7 +145,7 @@ export async function startBot(config, log, authDir) {
   const FINGERPRINT_FILE = NEW_FP_FILE;
 
   // ===========================================================================
-  // STALE PENDING FINGERPRINT CLEANUP (Bot-2 addition)
+  // STALE PENDING FINGERPRINT CLEANUP
   // ===========================================================================
 
   setInterval(() => {
@@ -244,10 +247,11 @@ export async function startBot(config, log, authDir) {
     const sourceGroup        = msg.key.remoteJid;
     const messageTimestampMs = (msg.messageTimestamp || 0) * 1000;
 
-    // ── Message age gate (5 min) ──
+    // ── Message age gate (5 min) — logs age on rejection ──
     const messageAge = Date.now() - messageTimestampMs;
     if (messageAge > MAX_MESSAGE_AGE) {
       stats.rejectedTooOld++;
+      log.warn(`⏰ Old message dropped: ${Math.floor(messageAge / 1000)}s old (max ${MAX_MESSAGE_AGE / 1000}s)`);
       return;
     }
 
@@ -327,8 +331,9 @@ export async function startBot(config, log, authDir) {
       return;
     }
 
-    // Optimistic lock
+    // Optimistic lock — logged
     pendingFingerprints.set(fingerprint, Date.now());
+    log.info(`🔒 Fingerprint locked (pending): ${fingerprint}`);
 
     // ── A4: Settling delay (first message after connect) ──
     if (needsSettlingDelay) {
@@ -336,14 +341,15 @@ export async function startBot(config, log, authDir) {
       const settleDuration =
         GLOBAL_CONFIG.reconnect.settlingMin +
         Math.floor(Math.random() * (GLOBAL_CONFIG.reconnect.settlingMax - GLOBAL_CONFIG.reconnect.settlingMin));
-      log.info(`⏳ Settling: ${(settleDuration / 1000).toFixed(1)}s`);
+      log.info(`⏳ Settling: ${(settleDuration / 1000).toFixed(1)}s (first message after connect)`);
       await new Promise((r) => setTimeout(r, settleDuration));
     }
 
-    // ── Processing delay (2-7s anti-ban) ──
+    // ── Processing delay (2-7s anti-ban) — logged ──
     const processingDelay =
       Math.floor(Math.random() * (PROCESSING_DELAY_MAX - PROCESSING_DELAY_MIN)) +
       PROCESSING_DELAY_MIN;
+    log.info(`⏳ Processing delay: ${(processingDelay / 1000).toFixed(1)}s`);
     await new Promise((r) => setTimeout(r, processingDelay));
 
     stats.totalProcessed++;
@@ -369,9 +375,9 @@ export async function startBot(config, log, authDir) {
       if (routingResult.path === "A") stats.pathARouted++;
       if (routingResult.path === "B") stats.pathBRouted++;
 
-      log.info(`✅ FP committed: ${fingerprint}`);
+      log.info(`✅ Fingerprint saved permanently: ${fingerprint}`);
 
-      // C1: Cleanup on overflow
+      // C1: Cleanup on overflow (trim to 80%)
       if (fingerprintSet.size > GLOBAL_CONFIG.deduplication.maxFingerprintCache) {
         const targetSize = Math.floor(
           GLOBAL_CONFIG.deduplication.maxFingerprintCache *
@@ -383,21 +389,25 @@ export async function startBot(config, log, authDir) {
           const val = iterator.next().value;
           if (val) fingerprintSet.delete(val);
         }
-        log.info(`🧹 FP cleanup: ${toDelete} removed, ${fingerprintSet.size} remain`);
+        log.info(`🧹 FP cleanup: deleted ${toDelete}, remaining ${fingerprintSet.size}`);
       }
     } else {
       pendingFingerprints.delete(fingerprint);
+      log.info(`🔓 Fingerprint unlocked (rejected): ${fingerprint}`);
     }
   }
 
   // ===========================================================================
-  // SOCKET TEARDOWN
+  // SOCKET TEARDOWN — named listener removal prevents ghost listeners
   // ===========================================================================
 
   function destroySocket(reason) {
     if (!sock) return;
     log.info(`🔌 Destroying socket: ${reason}`);
     try {
+      sock.ev.removeAllListeners("connection.update");
+      sock.ev.removeAllListeners("creds.update");
+      sock.ev.removeAllListeners("messages.upsert");
       sock.ev.removeAllListeners();
       sock.end(undefined);
     } catch (err) {
@@ -495,12 +505,12 @@ export async function startBot(config, log, authDir) {
           creds: authState.creds,
           keys: makeCacheableSignalKeyStore(authState.keys, baileysLogger),
         },
-        logger:               baileysLogger,
-        printQRInTerminal:    false,        // QR served via HTTP — no terminal spam
-        browser:              ["Taxi Bot", "Chrome", "120.0"],
-        markOnlineOnConnect:  false,
-        syncFullHistory:      false,
-        getMessage:           async () => undefined,
+        logger:                baileysLogger,
+        printQRInTerminal:     false,       // QR served via HTTP; also printed below
+        browser:               ["Taxi Bot", "Chrome", "120.0"],
+        markOnlineOnConnect:   false,
+        syncFullHistory:       false,
+        getMessage:            async () => undefined,
         defaultQueryTimeoutMs: 60_000,
         connectTimeoutMs:      60_000,
         keepAliveIntervalMs:   30_000,
@@ -518,11 +528,10 @@ export async function startBot(config, log, authDir) {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-          latestQR     = qr;
-          qrTimestamp  = Date.now();
-          log.info("📱 QR ready — scan at /qr or /qr-scanner.html");
-
-          // Also print to terminal as fallback
+          latestQR    = qr;
+          qrTimestamp = Date.now();
+          log.info("📱 QR ready — scan at /qr or in terminal below");
+          // Print to terminal as fallback (Bot-2 addition)
           try {
             const qrcodeTerminal = (await import("qrcode-terminal")).default;
             qrcodeTerminal.generate(qr, { small: true });
@@ -530,10 +539,10 @@ export async function startBot(config, log, authDir) {
         }
 
         if (connection === "open") {
-          latestQR        = null;
-          qrTimestamp     = null;
-          reconnectAttempts = 0;
-          lastReconnectTime = Date.now();
+          latestQR           = null;
+          qrTimestamp        = null;
+          reconnectAttempts  = 0;
+          lastReconnectTime  = Date.now();
           needsSettlingDelay = true;
 
           log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -575,17 +584,24 @@ export async function startBot(config, log, authDir) {
             process.exit(1);
           }
 
-          if (
-            errorMsg.includes("Bad MAC") ||
-            errorMsg.includes("No session found") ||
-            errorMsg.includes("Decryption error")
-          ) {
+          if (errorMsg.includes("Bad MAC") || errorMsg.includes("Decryption error")) {
             log.error("❌ Crypto session unrecoverable — exiting for clean restart");
             process.exit(1);
           }
 
-          // Aggressive backoff for crypto errors (statusCode 440)
-          if (statusCode === 440) {
+          // "No session found" on the stream itself (not individual messages) = unrecoverable
+          if (errorMsg.includes("No session found") && statusCode !== 515) {
+            log.error("❌ No session found (stream level) — exiting for clean restart");
+            process.exit(1);
+          }
+
+          // Prekey / statusCode 440 / 515 → extended backoff, NOT hard exit
+          if (
+            errorMsg.includes("prekey") ||
+            statusCode === 440 ||
+            statusCode === 515
+          ) {
+            log.warn("⚠️  Crypto/stream error — applying extended backoff");
             reconnectAttempts = Math.max(reconnectAttempts, 2);
           }
 
@@ -629,10 +645,10 @@ export async function startBot(config, log, authDir) {
     // Ping
     app.get("/ping", (_, res) => res.send("ALIVE"));
 
-    // Health
+    // Health — binary up/down for monitoring
     app.get("/health", (_, res) => {
-      const healthy    = botFullyOperational && !!sock?.user;
-      const total      = stats.sendSuccesses + stats.sendFailures;
+      const healthy     = botFullyOperational && !!sock?.user;
+      const total       = stats.sendSuccesses + stats.sendFailures;
       const failureRate = total > 0 ? (stats.sendFailures / total).toFixed(3) : "0.000";
 
       res.status(healthy ? 200 : 503).json({
@@ -649,7 +665,16 @@ export async function startBot(config, log, authDir) {
       });
     });
 
-    // Stats
+    // Status — legacy compatibility endpoint
+    app.get("/status", (_, res) => {
+      res.json({
+        connected:    botFullyOperational,
+        qrAvailable:  !!latestQR,
+        botName:      process.env.BOT_NAME || "unknown",
+      });
+    });
+
+    // Stats — full runtime state
     app.get("/stats", (_, res) => {
       res.json({
         bot: {
@@ -668,7 +693,7 @@ export async function startBot(config, log, authDir) {
           fingerprintFile:     NEW_FP_FILENAME,
         },
         reconnect: {
-          lastReconnect: lastReconnectTime
+          lastReconnect:   lastReconnectTime
             ? new Date(lastReconnectTime).toISOString()
             : null,
           totalReconnects: stats.reconnectCount,
@@ -680,17 +705,34 @@ export async function startBot(config, log, authDir) {
           freeCommonGroup:  config.freeCommonGroupId,
           configuredCities: config.configuredCities,
         },
+        enhancements: {
+          maxMessageAge:    `${MAX_MESSAGE_AGE / 1000}s`,
+          processingDelay:  `${PROCESSING_DELAY_MIN / 1000}-${PROCESSING_DELAY_MAX / 1000}s`,
+          stableFpFile:     true,
+          namedListeners:   true,
+        },
       });
     });
 
     // Groups — enriched with full metadata + Bot-1 path categorisation
     app.get("/groups", async (req, res) => {
-      if (!sock || !botFullyOperational) {
-        return res.status(503).json({ error: "Bot not connected", operational: botFullyOperational });
-      }
-      try {
-        const groupChats = await sock.groupFetchAllParticipating();
-        const allGroups  = Object.values(groupChats).map((chat) => ({
+  if (!sock || !botFullyOperational) {
+    return res.status(503).json({ 
+      error: "Bot not connected", 
+      operational: botFullyOperational 
+    });
+  }
+
+  try {
+    // Step 1: Fetch all groups the bot is actively in
+    const groupChats = await sock.groupFetchAllParticipating();
+    const fetchedGroups = Object.values(groupChats);
+
+    // Step 2: Build a map of fetched group data
+    const groupDataMap = new Map(
+      fetchedGroups.map((chat) => [
+        chat.id,
+        {
           id:               chat.id,
           name:             chat.subject || "Unknown Group",
           participantCount: chat.participants?.length || 0,
@@ -699,76 +741,170 @@ export async function startBot(config, log, authDir) {
             : null,
           description:      chat.desc || null,
           owner:            chat.owner || null,
-        }));
+          isFetched:        true,
+        },
+      ])
+    );
 
-        // Build lookup sets
-        const sourceSet  = new Set(config.sourceGroupIds);
-        const paidSet    = new Set(config.paidCommonGroupId);
-        const cityMap    = new Map(Object.entries(config.cityTargetGroups)); // groupId → city
-        const cityRevMap = new Map(
-          Object.entries(config.cityTargetGroups).map(([city, gid]) => [gid, city])
-        );
+    // Step 3: Collect ALL group IDs from config (even if bot was removed)
+    const allConfiguredGroupIds = new Set([
+      ...config.sourceGroupIds,
+      ...config.paidCommonGroupId,
+      config.freeCommonGroupId,
+      ...Object.values(config.cityTargetGroups),
+    ]);
 
-        const categorized = allGroups.map((group) => {
-          let category = "other";
-          let label    = "Unmonitored";
-          let meta     = null;
+    // Step 4: For each configured group not in fetched set, try to fetch metadata
+    const missingGroupIds = [...allConfiguredGroupIds].filter(
+      (id) => !groupDataMap.has(id)
+    );
 
-          if (sourceSet.has(group.id)) {
-            category = "source";
-            label    = "Source Group (Path A)";
-          } else if (group.id === config.freeCommonGroupId) {
-            category = "free_common";
-            label    = "Free Common (Path A dest + Path B source)";
-          } else if (paidSet.has(group.id)) {
-            category = "paid";
-            label    = "Paid Common";
-          } else if (cityRevMap.has(group.id)) {
-            category = "city";
-            label    = `City: ${cityRevMap.get(group.id)}`;
-            meta     = { city: cityRevMap.get(group.id) };
-          }
-
-          return { ...group, category, label, meta };
-        });
-
-        // Sort: source → paid → city → free_common → other
-        const sortOrder = { source: 1, paid: 2, city: 3, free_common: 4, other: 5 };
-        categorized.sort((a, b) => {
-          const oa = sortOrder[a.category] || 9;
-          const ob = sortOrder[b.category] || 9;
-          if (oa !== ob) return oa - ob;
-          return (a.name || "").localeCompare(b.name || "");
-        });
-
-        res.json({
-          success: true,
-          bot: {
-            name:  process.env.BOT_NAME || "unknown",
-            phone: sock.user?.id || "unknown",
-          },
-          totalGroups: categorized.length,
-          breakdown: {
-            source:     categorized.filter((g) => g.category === "source").length,
-            paid:       categorized.filter((g) => g.category === "paid").length,
-            city:       categorized.filter((g) => g.category === "city").length,
-            freeCommon: categorized.filter((g) => g.category === "free_common").length,
-            unmonitored: categorized.filter((g) => g.category === "other").length,
-          },
-          routing: {
-            pathA: "source group → paid[] + city + free",
-            pathB: "freeCommon → paid[] + city",
-            cities: config.configuredCities,
-          },
-          groups: categorized,
+    // Attempt to fetch metadata for missing groups (may fail if bot was removed)
+    for (const groupId of missingGroupIds) {
+      try {
+        const metadata = await sock.groupMetadata(groupId);
+        groupDataMap.set(groupId, {
+          id:               groupId,
+          name:             metadata.subject || "Unknown Group",
+          participantCount: metadata.participants?.length || 0,
+          createdAt:        metadata.creation
+            ? new Date(metadata.creation * 1000).toISOString()
+            : null,
+          description:      metadata.desc || null,
+          owner:            metadata.owner || null,
+          isFetched:        false, // Metadata fetched but bot not in group
+          status:           "not_participating", // Bot was likely removed
         });
       } catch (err) {
-        log.error(`❌ /groups error: ${err.message}`);
-        res.status(500).json({ success: false, error: err.message });
+        // If metadata fetch fails, the group doesn't exist or bot never joined
+        groupDataMap.set(groupId, {
+          id:               groupId,
+          name:             "⚠️ Unknown / Removed Group",
+          participantCount: 0,
+          createdAt:        null,
+          description:      null,
+          owner:            null,
+          isFetched:        false,
+          status:           "unavailable", // Can't fetch metadata
+        });
+        log.warn(`⚠️  Failed to fetch metadata for ${groupId}: ${err.message}`);
       }
+    }
+
+    // Step 5: Categorize ALL groups (fetched + configured)
+    const allGroups = Array.from(groupDataMap.values());
+
+    const sourceSet  = new Set(config.sourceGroupIds);
+    const paidSet    = new Set(config.paidCommonGroupId);
+    const cityRevMap = new Map(
+      Object.entries(config.cityTargetGroups).map(([city, gid]) => [gid, city])
+    );
+
+    const categorized = allGroups.map((group) => {
+      let category = "other";
+      let label    = "Unmonitored";
+      let meta     = null;
+
+      if (sourceSet.has(group.id)) {
+        category = "source";
+        label    = "Source Group (Path A)";
+      } else if (group.id === config.freeCommonGroupId) {
+        category = "free_common";
+        label    = "Free Common (Path A dest + Path B source)";
+      } else if (paidSet.has(group.id)) {
+        category = "paid";
+        label    = "Paid Common";
+      } else if (cityRevMap.has(group.id)) {
+        category = "city";
+        label    = `City: ${cityRevMap.get(group.id)}`;
+        meta     = { city: cityRevMap.get(group.id) };
+      }
+
+      // Add warning if group is configured but bot not participating
+      if (category !== "other" && group.status === "not_participating") {
+        label += " ⚠️ (Bot Not In Group)";
+      } else if (category !== "other" && group.status === "unavailable") {
+        label += " ❌ (Group Unavailable)";
+      }
+
+      return { ...group, category, label, meta };
     });
 
-    // QR PNG — dynamic import so missing package doesn't crash the process
+    // Step 6: Sort by category
+    const sortOrder = { source: 1, paid: 2, city: 3, free_common: 4, other: 5 };
+    categorized.sort((a, b) => {
+      const oa = sortOrder[a.category] || 9;
+      const ob = sortOrder[b.category] || 9;
+      if (oa !== ob) return oa - ob;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+
+    // Step 7: Build response with health warnings
+    const healthWarnings = [];
+    
+    const missingSource = config.sourceGroupIds.filter(
+      (id) => groupDataMap.get(id)?.status !== undefined
+    );
+    const missingPaid = config.paidCommonGroupId.filter(
+      (id) => groupDataMap.get(id)?.status !== undefined
+    );
+    const missingCity = Object.entries(config.cityTargetGroups)
+      .filter(([_, gid]) => groupDataMap.get(gid)?.status !== undefined)
+      .map(([city, gid]) => ({ city, groupId: gid }));
+
+    if (missingSource.length > 0) {
+      healthWarnings.push({
+        type: "missing_source_groups",
+        count: missingSource.length,
+        groupIds: missingSource,
+      });
+    }
+    if (missingPaid.length > 0) {
+      healthWarnings.push({
+        type: "missing_paid_groups",
+        count: missingPaid.length,
+        groupIds: missingPaid,
+      });
+    }
+    if (missingCity.length > 0) {
+      healthWarnings.push({
+        type: "missing_city_groups",
+        count: missingCity.length,
+        cities: missingCity,
+      });
+    }
+
+    res.json({
+      success: true,
+      bot: {
+        name:  process.env.BOT_NAME || "unknown",
+        phone: sock.user?.id || "unknown",
+      },
+      totalGroups: categorized.length,
+      breakdown: {
+        source:      categorized.filter((g) => g.category === "source").length,
+        paid:        categorized.filter((g) => g.category === "paid").length,
+        city:        categorized.filter((g) => g.category === "city").length,
+        freeCommon:  categorized.filter((g) => g.category === "free_common").length,
+        unmonitored: categorized.filter((g) => g.category === "other").length,
+      },
+      health: {
+        allConfiguredGroupsAccessible: healthWarnings.length === 0,
+        warnings: healthWarnings,
+      },
+      routing: {
+        pathA:  "source group → paid[] + city + free",
+        pathB:  "freeCommon → paid[] + city",
+        cities: config.configuredCities,
+      },
+      groups: categorized,
+    });
+  } catch (err) {
+    log.error(`❌ /groups error: ${err.message}`);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+    // QR PNG — dynamic import so missing qrcode package doesn't crash the process
     app.get("/qr", async (req, res) => {
       if (!latestQR) {
         return res.status(404).send("QR not available. Bot may already be connected.");
@@ -784,15 +920,14 @@ export async function startBot(config, log, authDir) {
         });
         res.type("png").send(buf);
       } catch (err) {
-        // qrcode not installed yet — tell user to npm install
         if (err.code === "ERR_MODULE_NOT_FOUND") {
-          return res.status(503).send("QR image unavailable: run 'npm install' to add the qrcode package, then restart.");
+          return res.status(503).send("QR image unavailable: run 'npm install' to add the qrcode package.");
         }
         res.status(500).send("QR generation failed");
       }
     });
 
-    // QR base64 — same dynamic import pattern
+    // QR base64
     app.get("/qr/base64", async (req, res) => {
       if (!latestQR) {
         return res.status(404).json({ error: "QR not available", qrAvailable: false });
@@ -801,7 +936,7 @@ export async function startBot(config, log, authDir) {
         return res.status(410).json({ error: "QR expired", qrAvailable: false });
       }
       try {
-        const QRCode = (await import("qrcode")).default;
+        const QRCode  = (await import("qrcode")).default;
         const dataURL = await QRCode.toDataURL(latestQR, { width: 400, margin: 2 });
         res.json({ qr: dataURL, qrAvailable: true, timestamp: qrTimestamp });
       } catch (err) {
@@ -828,7 +963,7 @@ export async function startBot(config, log, authDir) {
     log.info(`👋 ${signal} — shutting down`);
     isShuttingDown = true;
 
-    if (reconnectTimer)    { clearTimeout(reconnectTimer);  reconnectTimer   = null; }
+    if (reconnectTimer)    { clearTimeout(reconnectTimer);   reconnectTimer   = null; }
     if (saveDebounceTimer) { clearTimeout(saveDebounceTimer); saveDebounceTimer = null; }
 
     saveFingerprints();
@@ -840,6 +975,7 @@ export async function startBot(config, log, authDir) {
     log.info(`   Path B:      ${stats.pathBRouted}`);
     log.info(`   Duplicates:  ${stats.duplicatesSkipped}`);
     log.info(`   Too old:     ${stats.rejectedTooOld}`);
+    log.info(`   Replays:     ${stats.replayIdsSkipped}`);
     log.info(`   Races:       ${stats.racePrevented} (prevented)`);
     log.info(`   Crypto:      ${stats.cryptoErrors} (normal)`);
     log.info(`   Reconnects:  ${stats.reconnectCount}`);
@@ -859,13 +995,15 @@ export async function startBot(config, log, authDir) {
   // ===========================================================================
 
   log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  log.info("🚀 TAXI BOT v3 STARTING (Path A/B + Bot-2 Stability)");
+  log.info("🚀 TAXI BOT v4 STARTING (Path A/B + Full Feature Parity)");
   log.info("   ✅ Auth-once (Bad MAC fix)");
-  log.info("   ✅ QR via HTTP (/qr)");
-  log.info("   ✅ 5-min message age gate");
-  log.info("   ✅ Processing delay 2-7s");
+  log.info("   ✅ Named listener removal (ghost listener fix)");
+  log.info("   ✅ QR via HTTP + terminal fallback");
+  log.info("   ✅ 5-min message age gate (logged)");
+  log.info("   ✅ Processing delay 2-7s (logged)");
+  log.info("   ✅ Verbose FP lock/unlock logs");
+  log.info("   ✅ /health + /status + /stats + /groups");
   log.info("   ✅ Stale fingerprint cleanup");
-  log.info("   ✅ /health endpoint");
   log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   loadFingerprints();

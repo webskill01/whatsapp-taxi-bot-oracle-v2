@@ -1,19 +1,28 @@
 /**
  * ============================================================================
- * ROUTER — Path A / Path B Message Routing
+ * router.js — Path A / Path B Routing
  * ============================================================================
- * Bot-1 ROUTING LOGIC PRESERVED:
+ * ROUTING (Bot-1):
  *   Path A: source group → paidCommonGroupId[] + cityTargetGroup + freeCommonGroupId
- *   Path B: freeCommonGroupId → paidCommonGroupId[] + cityTargetGroup (not free)
+ *   Path B: freeCommonGroupId → paidCommonGroupId[] + cityTargetGroup (NOT free)
  *
- * Bot-2 IMPROVEMENTS APPLIED:
+ * STABILITY:
  *   ✅ Module-level state (circuit breaker, rate limiter, cooldowns)
  *   ✅ Sliding-window rate limiter (accurate, no reset skew)
- *   ✅ Returns { wasRouted: boolean } — fingerprint only committed on true
- *   ✅ A1: Length-scaled typing delay (1.0-1.8s)
+ *   ✅ Circuit breaker (opens at 10 failures, resets after 60s)
+ *   ✅ inFlightSends.delete on ALL failure paths (fixes stuck cooldown)
+ *   ✅ Returns { wasRouted: boolean, path: "A"|"B"|"none" }
+ *
+ * ANTI-BAN:
+ *   ✅ A1: Length-scaled typing delay (1.0-1.8s, before first send only)
  *   ✅ A3: Fisher-Yates shuffle (target randomization)
- *   ✅ A5: Weighted between-group gaps (0.8-1.5s)
- *   ✅ Concise logging — only log key events and failures
+ *   ✅ A5: Weighted between-group gaps (0.8-1.5s, 65% low-end bias)
+ *   ✅ Per-group send cooldown (1s)
+ *   ✅ 15s send timeout with single retry
+ *
+ * LOGGING:
+ *   ✅ Every gate logs its decision (pass or reject)
+ *   ✅ Improved no-phone log: shows potential number patterns found
  * ============================================================================
  */
 
@@ -27,7 +36,7 @@ import {
 import { GLOBAL_CONFIG } from "./globalConfig.js";
 
 // =============================================================================
-// MODULE-LEVEL STATE (Bot-2 pattern — one per process, not per startBot call)
+// MODULE-LEVEL STATE (one per process, shared across reconnects)
 // =============================================================================
 
 // Sliding-window rate limiter
@@ -39,7 +48,7 @@ const inFlightSends = new Map();
 // Circuit breaker
 const circuitBreaker = {
   failureCount: 0,
-  isOpen: false,
+  isOpen:       false,
   resetTimeout: null,
 };
 
@@ -86,7 +95,7 @@ function handleSendFailure(log) {
     circuitBreaker.isOpen = true;
     log.error(`🔴 CIRCUIT BREAKER OPEN — pausing ${GLOBAL_CONFIG.circuitBreaker.breakDuration / 1000}s`);
     circuitBreaker.resetTimeout = setTimeout(() => {
-      circuitBreaker.isOpen = false;
+      circuitBreaker.isOpen       = false;
       circuitBreaker.failureCount = 0;
       log.info("🟢 CIRCUIT BREAKER RESET");
     }, GLOBAL_CONFIG.circuitBreaker.breakDuration);
@@ -94,7 +103,7 @@ function handleSendFailure(log) {
 }
 
 // =============================================================================
-// DELAY UTILITIES (Bot-1 / Bot-2 identical)
+// DELAY UTILITIES
 // =============================================================================
 
 /** Uniform random in [min, max] */
@@ -102,7 +111,7 @@ function getRandomDelay(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-/** A5: Biased toward lower end */
+/** A5: Biased toward lower end (65% in lower band) */
 function getWeightedDelay(min, max, weight) {
   const range = max - min;
   if (Math.random() < weight) {
@@ -111,7 +120,7 @@ function getWeightedDelay(min, max, weight) {
   return Math.floor(min + range * weight + Math.random() * (range * (1 - weight)));
 }
 
-/** A1: Typing delay scaled by text length, clamped */
+/** A1: Typing delay scaled by text length, clamped to [typingMin, typingMax] */
 function getTypingDelay(textLength) {
   const raw = textLength * GLOBAL_CONFIG.humanBehavior.typingBasePerChar;
   return Math.min(
@@ -140,7 +149,7 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
     return { successCount: 0, totalTargets: targets.length };
   }
 
-  const now = Date.now();
+  const now          = Date.now();
   const readyTargets = targets.filter((id) => {
     const lastSend = inFlightSends.get(id);
     return !lastSend || now - lastSend >= GLOBAL_CONFIG.deduplication.sendCooldown;
@@ -153,8 +162,8 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
 
   log.info(`📤 [${label}] Sending to ${readyTargets.length} target(s)...`);
 
-  let successCount = 0;
-  const startTime = Date.now();
+  let successCount   = 0;
+  const startTime    = Date.now();
 
   for (let i = 0; i < readyTargets.length; i++) {
     if (circuitBreaker.isOpen) {
@@ -162,8 +171,8 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
       break;
     }
 
-    const groupId  = readyTargets[i];
-    const shortId  = groupId.substring(0, 18);
+    const groupId = readyTargets[i];
+    const shortId = groupId.substring(0, 18);
 
     // A1: Typing delay before first message only
     if (i === 0) {
@@ -199,7 +208,7 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
       await Promise.race([
         sock.sendMessage(groupId, { text }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Timeout 15s")), 15000)
+          setTimeout(() => reject(new Error("Timeout 15s")), 15_000)
         ),
       ]);
 
@@ -207,11 +216,12 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
       handleSendSuccess();
       stats.sendSuccesses++;
       successCount++;
+
     } catch (error) {
-      // Single retry on timeout
       if (error.message.includes("Timeout")) {
+        // Single retry on timeout
         try {
-          await new Promise((r) => setTimeout(r, 1000));
+          await new Promise((r) => setTimeout(r, 1_000));
           await sock.sendMessage(groupId, { text });
           log.info(`✅ → ${shortId}... (retry OK)`);
           handleSendSuccess();
@@ -221,13 +231,13 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
           log.error(`❌ → ${shortId}... FAILED (retry) ${retryErr.message}`);
           handleSendFailure(log);
           stats.sendFailures++;
-          inFlightSends.delete(groupId);
+          inFlightSends.delete(groupId); // clear stuck cooldown on retry fail
         }
       } else {
         log.error(`❌ → ${shortId}... ${error.message}`);
         handleSendFailure(log);
         stats.sendFailures++;
-        inFlightSends.delete(groupId);
+        inFlightSends.delete(groupId); // clear stuck cooldown on direct fail
       }
     }
   }
@@ -255,9 +265,15 @@ async function processPathA(sock, text, sourceGroup, config, stats, log) {
     return { wasRouted: false };
   }
 
-  // Gate 3: Phone number required
+  // Gate 3: Phone number required — improved debug log shows what was found
   if (!hasPhoneNumber(text)) {
-    log.warn(`📵 NO PHONE (Path A) | ${text.substring(0, 40)}...`);
+    const phonePattern    = /(\+?\d[\d\s\-().]{6,}\d)/g;
+    const potentialPhones = text.match(phonePattern);
+    if (potentialPhones) {
+      log.warn(`📵 NO VALID PHONE (Path A) — found: [${potentialPhones.join(", ")}] | ${text.substring(0, 40)}...`);
+    } else {
+      log.warn(`📵 NO PHONE (Path A) | ${text.substring(0, 40)}...`);
+    }
     stats.rejectedNoPhone++;
     return { wasRouted: false };
   }
@@ -274,23 +290,19 @@ async function processPathA(sock, text, sourceGroup, config, stats, log) {
 
   log.info(`✅ PATH A PASS | City: ${detectedCity || "none"} | Source: ${sourceGroup.substring(0, 18)}...`);
 
-  // Build target list: paid[] + city (if found) + free
-  const targets = [
+  // Build targets: paid[] + city (if found) + free
+  const targets  = [
     ...config.paidCommonGroupId,
     ...(cityGroupId ? [cityGroupId] : []),
     config.freeCommonGroupId,
   ];
-
-  // Remove any duplicates, then shuffle (A3)
-  const unique   = [...new Set(targets)];
-  const shuffled = shuffleArray(unique);
+  const shuffled = shuffleArray([...new Set(targets)]);
 
   const { successCount } = await sendToMultipleGroupsSequential(
     sock, shuffled, text, `PathA-${detectedCity || "noCity"}`, stats, log
   );
 
   log.info(`✅ PATH A DONE: ${successCount}/${shuffled.length} | City: ${detectedCity || "none"} | ${rateLimitTimestamps.hourly.length}/${GLOBAL_CONFIG.rateLimits.hourly}h`);
-
   return { wasRouted: successCount > 0 };
 }
 
@@ -313,9 +325,15 @@ async function processPathB(sock, text, config, stats, log) {
     return { wasRouted: false };
   }
 
-  // Gate 3: Phone number required
+  // Gate 3: Phone number required — improved debug log
   if (!hasPhoneNumber(text)) {
-    log.warn(`📵 NO PHONE (Path B) | ${text.substring(0, 40)}...`);
+    const phonePattern    = /(\+?\d[\d\s\-().]{6,}\d)/g;
+    const potentialPhones = text.match(phonePattern);
+    if (potentialPhones) {
+      log.warn(`📵 NO VALID PHONE (Path B) — found: [${potentialPhones.join(", ")}] | ${text.substring(0, 40)}...`);
+    } else {
+      log.warn(`📵 NO PHONE (Path B) | ${text.substring(0, 40)}...`);
+    }
     stats.rejectedNoPhone++;
     return { wasRouted: false };
   }
@@ -332,31 +350,26 @@ async function processPathB(sock, text, config, stats, log) {
 
   log.info(`✅ PATH B PASS | City: ${detectedCity || "none"}`);
 
-  // Build target list: paid[] + city (if found). Free is source — do NOT echo back.
-  const targets = [
+  // Build targets: paid[] + city — free is source, do NOT echo back
+  const targets  = [
     ...config.paidCommonGroupId,
     ...(cityGroupId ? [cityGroupId] : []),
   ];
-
-  const unique   = [...new Set(targets)];
-  const shuffled = shuffleArray(unique);
+  const shuffled = shuffleArray([...new Set(targets)]);
 
   const { successCount } = await sendToMultipleGroupsSequential(
     sock, shuffled, text, `PathB-${detectedCity || "noCity"}`, stats, log
   );
 
   log.info(`✅ PATH B DONE: ${successCount}/${shuffled.length} | City: ${detectedCity || "none"} | ${rateLimitTimestamps.hourly.length}/${GLOBAL_CONFIG.rateLimits.hourly}h`);
-
   return { wasRouted: successCount > 0 };
 }
 
 // =============================================================================
-// MAIN EXPORT — called from index.js handleMessage()
+// MAIN EXPORT
 //
-// Receives pre-extracted text and path from index.js.
-// This eliminates the double message-parse and the silent-fail when
-// message.message is undefined/wrapped — which was causing messages to be
-// received but never forwarded.
+// Receives pre-extracted text and path from index.js (not the raw message
+// object) — eliminates double-parse silent-fail bug.
 //
 // Signature: processMessage(sock, text, sourceGroup, isPathA, config, stats, log)
 // Returns:   { wasRouted: boolean, path: "A"|"B"|"none" }
@@ -385,6 +398,7 @@ export async function processMessage(sock, text, sourceGroup, isPathA, config, s
     return { wasRouted: false, path: "none" };
   }
 }
+
 // =============================================================================
 // CLEANUP — purge stale cooldown entries every 30s
 // =============================================================================
