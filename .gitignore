@@ -32,5 +32,7 @@ baileys_auth/
 .forwarded-messages.json
 logs/
 node_modules/
-admin-bot.json
-taxi-bot.json
+admin-groups.json
+/taxi-groups.json
+core/index.js.back
+core/router.js.back

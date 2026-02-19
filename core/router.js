@@ -1,17 +1,14 @@
 /**
  * ============================================================================
- * router.js — Path A / Path B Routing
+ * router.js — Path A / Path B Routing (OPTIMIZED)
  * ============================================================================
+ * ✅ CRITICAL FIX: Processing delay moved AFTER validation (saves 2-7s)
+ * ✅ Pickup-only city extraction preserved (no dual city logic)
+ * ✅ All Bot-2 improvements applied while keeping Path A/B routing intact
+ *
  * ROUTING (Bot-1):
  *   Path A: source group → paidCommonGroupId[] + cityTargetGroup + freeCommonGroupId
  *   Path B: freeCommonGroupId → paidCommonGroupId[] + cityTargetGroup (NOT free)
- *
- * STABILITY:
- *   ✅ Module-level state (circuit breaker, rate limiter, cooldowns)
- *   ✅ Sliding-window rate limiter (accurate, no reset skew)
- *   ✅ Circuit breaker (opens at 10 failures, resets after 60s)
- *   ✅ inFlightSends.delete on ALL failure paths (fixes stuck cooldown)
- *   ✅ Returns { wasRouted: boolean, path: "A"|"B"|"none" }
  *
  * ANTI-BAN:
  *   ✅ A1: Length-scaled typing delay (1.0-1.8s, before first send only)
@@ -19,10 +16,9 @@
  *   ✅ A5: Weighted between-group gaps (0.8-1.5s, 65% low-end bias)
  *   ✅ Per-group send cooldown (1s)
  *   ✅ 15s send timeout with single retry
- *
- * LOGGING:
- *   ✅ Every gate logs its decision (pass or reject)
- *   ✅ Improved no-phone log: shows potential number patterns found
+ *   ✅ Circuit breaker (opens at 10 failures, resets after 60s)
+ *   ✅ Sliding-window rate limiter (accurate, no reset skew)
+ *   ✅ inFlightSends.delete on ALL failure paths (fixes stuck cooldown)
  * ============================================================================
  */
 
@@ -53,7 +49,7 @@ const circuitBreaker = {
 };
 
 // =============================================================================
-// RATE LIMITING (sliding window — no top-of-hour reset skew)
+// RATE LIMITING (sliding window)
 // =============================================================================
 
 function isRateLimited(log) {
@@ -106,12 +102,10 @@ function handleSendFailure(log) {
 // DELAY UTILITIES
 // =============================================================================
 
-/** Uniform random in [min, max] */
 function getRandomDelay(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-/** A5: Biased toward lower end (65% in lower band) */
 function getWeightedDelay(min, max, weight) {
   const range = max - min;
   if (Math.random() < weight) {
@@ -120,7 +114,6 @@ function getWeightedDelay(min, max, weight) {
   return Math.floor(min + range * weight + Math.random() * (range * (1 - weight)));
 }
 
-/** A1: Typing delay scaled by text length, clamped to [typingMin, typingMax] */
 function getTypingDelay(textLength) {
   const raw = textLength * GLOBAL_CONFIG.humanBehavior.typingBasePerChar;
   return Math.min(
@@ -129,7 +122,6 @@ function getTypingDelay(textLength) {
   );
 }
 
-/** A3: Fisher-Yates shuffle — returns a NEW array, does not mutate */
 function shuffleArray(arr) {
   const shuffled = [...arr];
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -247,10 +239,14 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
 }
 
 // =============================================================================
-// PATH A — Source group → Paid[] + City + Free
+// PATH A — Source group → Paid[] + City + Free (WITH PROCESSING DELAY)
 // =============================================================================
 
 async function processPathA(sock, text, sourceGroup, config, stats, log) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VALIDATION CHECKS (fast — no delays yet)
+  // ═══════════════════════════════════════════════════════════════════════════
+
   // Gate 1: Blocked number
   if (containsBlockedNumber(text, config.blockedPhoneNumbers)) {
     log.warn(`🚫 BLOCKED NUMBER (Path A)`);
@@ -265,7 +261,7 @@ async function processPathA(sock, text, sourceGroup, config, stats, log) {
     return { wasRouted: false };
   }
 
-  // Gate 3: Phone number required — improved debug log shows what was found
+  // Gate 3: Phone number required
   if (!hasPhoneNumber(text)) {
     const phonePattern    = /(\+?\d[\d\s\-().]{6,}\d)/g;
     const potentialPhones = text.match(phonePattern);
@@ -284,11 +280,20 @@ async function processPathA(sock, text, sourceGroup, config, stats, log) {
     return { wasRouted: false };
   }
 
-  // City extraction
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ✅ ALL VALIDATIONS PASSED — Apply processing delay NOW (optimization)
+  // ═══════════════════════════════════════════════════════════════════════════
+  log.info(`✅ PATH A VALIDATION PASSED | Applying processing delay...`);
+  
+  const processingDelay = Math.floor(Math.random() * (7000 - 2000)) + 2000; // 2-7s
+  log.info(`⏳ Processing delay: ${(processingDelay / 1000).toFixed(1)}s`);
+  await new Promise((r) => setTimeout(r, processingDelay));
+
+  // City extraction (pickup-only, Bot-1 logic preserved)
   const detectedCity = extractPickupCity(text, config.configuredCities);
   const cityGroupId  = detectedCity ? config.cityTargetGroups[detectedCity] : null;
 
-  log.info(`✅ PATH A PASS | City: ${detectedCity || "none"} | Source: ${sourceGroup.substring(0, 18)}...`);
+  log.info(`🔀 PATH A ROUTING | City: ${detectedCity || "none"} | Source: ${sourceGroup.substring(0, 18)}...`);
 
   // Build targets: paid[] + city (if found) + free
   const targets  = [
@@ -307,10 +312,14 @@ async function processPathA(sock, text, sourceGroup, config, stats, log) {
 }
 
 // =============================================================================
-// PATH B — Free common group → Paid[] + City (NOT free — it's the source)
+// PATH B — Free common group → Paid[] + City (WITH PROCESSING DELAY)
 // =============================================================================
 
 async function processPathB(sock, text, config, stats, log) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VALIDATION CHECKS (fast — no delays yet)
+  // ═══════════════════════════════════════════════════════════════════════════
+
   // Gate 1: Blocked number
   if (containsBlockedNumber(text, config.blockedPhoneNumbers)) {
     log.warn(`🚫 BLOCKED NUMBER (Path B)`);
@@ -325,7 +334,7 @@ async function processPathB(sock, text, config, stats, log) {
     return { wasRouted: false };
   }
 
-  // Gate 3: Phone number required — improved debug log
+  // Gate 3: Phone number required
   if (!hasPhoneNumber(text)) {
     const phonePattern    = /(\+?\d[\d\s\-().]{6,}\d)/g;
     const potentialPhones = text.match(phonePattern);
@@ -344,11 +353,20 @@ async function processPathB(sock, text, config, stats, log) {
     return { wasRouted: false };
   }
 
-  // City extraction
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ✅ ALL VALIDATIONS PASSED — Apply processing delay NOW (optimization)
+  // ═══════════════════════════════════════════════════════════════════════════
+  log.info(`✅ PATH B VALIDATION PASSED | Applying processing delay...`);
+  
+  const processingDelay = Math.floor(Math.random() * (7000 - 2000)) + 2000; // 2-7s
+  log.info(`⏳ Processing delay: ${(processingDelay / 1000).toFixed(1)}s`);
+  await new Promise((r) => setTimeout(r, processingDelay));
+
+  // City extraction (pickup-only, Bot-1 logic preserved)
   const detectedCity = extractPickupCity(text, config.configuredCities);
   const cityGroupId  = detectedCity ? config.cityTargetGroups[detectedCity] : null;
 
-  log.info(`✅ PATH B PASS | City: ${detectedCity || "none"}`);
+  log.info(`🔀 PATH B ROUTING | City: ${detectedCity || "none"}`);
 
   // Build targets: paid[] + city — free is source, do NOT echo back
   const targets  = [
@@ -366,10 +384,7 @@ async function processPathB(sock, text, config, stats, log) {
 }
 
 // =============================================================================
-// MAIN EXPORT
-//
-// Receives pre-extracted text and path from index.js (not the raw message
-// object) — eliminates double-parse silent-fail bug.
+// MAIN EXPORT (receives pre-extracted text from index.js)
 //
 // Signature: processMessage(sock, text, sourceGroup, isPathA, config, stats, log)
 // Returns:   { wasRouted: boolean, path: "A"|"B"|"none" }

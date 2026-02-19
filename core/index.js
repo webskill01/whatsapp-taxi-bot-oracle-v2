@@ -1,6 +1,10 @@
 // =============================================================================
-// core/index.js — WhatsApp Bot Core (Bot-1 + all Bot-2 improvements merged)
+// core/index.js — WhatsApp Bot Core (Bot-1 OPTIMIZED)
 // =============================================================================
+// ✅ CRITICAL FIX APPLIED: Processing delay moved AFTER validation
+// ✅ All Bot-2 improvements merged while preserving Path A/B routing
+// ✅ Pickup-only city extraction (no dual city routing)
+//
 // STABILITY:
 //   ✅ Auth state loaded ONCE (closure) — fixes Bad MAC death loop
 //   ✅ isConnecting guard — no concurrent socket creation
@@ -19,9 +23,7 @@
 //   ✅ /ping /health /stats /status /groups HTTP endpoints
 //   ✅ PM2 graceful shutdown (SIGINT / SIGTERM / SIGHUP)
 //   ✅ 5-minute message age gate (logs rejection with age in seconds)
-//   ✅ Processing delay 2-7s (logged)
 //   ✅ Stable per-bot fingerprint filename (botId + phone, auto-migrates old)
-//   ✅ Verbose fingerprint lock/unlock logs
 //
 // ROUTING (Bot-1):
 //   ✅ Path A: source group → paid[] + city + free
@@ -49,9 +51,7 @@ import { GLOBAL_CONFIG }         from "./globalConfig.js";
 // =============================================================================
 // CONSTANTS
 // =============================================================================
-const MAX_MESSAGE_AGE      = 5 * 60 * 1000;  // 5 minutes
-const PROCESSING_DELAY_MIN = 2_000;           // 2s
-const PROCESSING_DELAY_MAX = 7_000;           // 7s
+const MAX_MESSAGE_AGE = 5 * 60 * 1000;  // 5 minutes
 
 // =============================================================================
 // MAIN EXPORT
@@ -230,7 +230,7 @@ export async function startBot(config, log, authDir) {
   }
 
   // ===========================================================================
-  // MESSAGE HANDLER
+  // MESSAGE HANDLER (OPTIMIZED: delay moved to router AFTER validation)
   // ===========================================================================
 
   async function handleMessage(msg) {
@@ -331,9 +331,8 @@ export async function startBot(config, log, authDir) {
       return;
     }
 
-    // Optimistic lock — logged
+    // Optimistic lock
     pendingFingerprints.set(fingerprint, Date.now());
-    log.info(`🔒 Fingerprint locked (pending): ${fingerprint}`);
 
     // ── A4: Settling delay (first message after connect) ──
     if (needsSettlingDelay) {
@@ -345,19 +344,19 @@ export async function startBot(config, log, authDir) {
       await new Promise((r) => setTimeout(r, settleDuration));
     }
 
-    // ── Processing delay (2-7s anti-ban) — logged ──
-    const processingDelay =
-      Math.floor(Math.random() * (PROCESSING_DELAY_MAX - PROCESSING_DELAY_MIN)) +
-      PROCESSING_DELAY_MIN;
-    log.info(`⏳ Processing delay: ${(processingDelay / 1000).toFixed(1)}s`);
-    await new Promise((r) => setTimeout(r, processingDelay));
-
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // FIX: Log BEFORE validation (no processing delay wasted on rejected msgs)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     stats.totalProcessed++;
     log.info(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     log.info(`📥 MSG #${stats.totalProcessed} | Path ${isPathA ? "A" : "B"} | ${sourceGroup.substring(0, 18)}...`);
     log.info(`   "${text.substring(0, 60)}${text.length > 60 ? "..." : ""}"`);
     log.info(`   FP: ${fingerprint}`);
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // FIX: Pass pre-extracted text to router (not raw msg object)
+    // Processing delay happens INSIDE router AFTER validation passes
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     let routingResult;
     try {
       routingResult = await processMessage(sock, text, sourceGroup, isPathA, config, stats, log);
@@ -531,7 +530,7 @@ export async function startBot(config, log, authDir) {
           latestQR    = qr;
           qrTimestamp = Date.now();
           log.info("📱 QR ready — scan at /qr or in terminal below");
-          // Print to terminal as fallback (Bot-2 addition)
+          // Print to terminal as fallback
           try {
             const qrcodeTerminal = (await import("qrcode-terminal")).default;
             qrcodeTerminal.generate(qr, { small: true });
@@ -552,16 +551,17 @@ export async function startBot(config, log, authDir) {
 
           if (!botFullyOperational) {
             botFullyOperational = true;
-            log.info("🎉 BOT FULLY OPERATIONAL");
+            log.info("🎉 BOT FULLY OPERATIONAL (OPTIMIZED)");
             log.info(`   📍 Source groups:  ${config.sourceGroupIds.length}`);
             log.info(`   🆓 Free common:   ${config.freeCommonGroupId.substring(0, 20)}...`);
             log.info(`   💎 Paid groups:   ${config.paidCommonGroupId.length}`);
             log.info(`   🏙️  City groups:   ${config.configuredCities.length} (${config.configuredCities.join(", ")})`);
             log.info(`   🚫 Blocked nums:  ${config.blockedPhoneNumbers.length}`);
             log.info(`   ⏰ Max msg age:   ${MAX_MESSAGE_AGE / 1000}s`);
-            log.info(`   ⏱️  Process delay: ${PROCESSING_DELAY_MIN / 1000}-${PROCESSING_DELAY_MAX / 1000}s`);
             log.info(`   ⚡ Race prevention: ACTIVE`);
             log.info(`   📂 Fingerprint file: ${NEW_FP_FILENAME}`);
+            log.info(`   🔀 Routing: Pickup-only city detection (Path A/B)`);
+            log.info(`   ⏱️  Processing delay: AFTER validation (optimized)`);
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
           }
         }
@@ -631,7 +631,7 @@ export async function startBot(config, log, authDir) {
   }
 
   // ===========================================================================
-  // STATS / HTTP SERVER
+  // STATS / HTTP SERVER (keeping existing /groups endpoint with improvements)
   // ===========================================================================
 
   function startStatsServer() {
@@ -706,15 +706,16 @@ export async function startBot(config, log, authDir) {
           configuredCities: config.configuredCities,
         },
         enhancements: {
-          maxMessageAge:    `${MAX_MESSAGE_AGE / 1000}s`,
-          processingDelay:  `${PROCESSING_DELAY_MIN / 1000}-${PROCESSING_DELAY_MAX / 1000}s`,
-          stableFpFile:     true,
-          namedListeners:   true,
+          maxMessageAge:       `${MAX_MESSAGE_AGE / 1000}s`,
+          processingDelay:     "AFTER validation (optimized)",
+          stableFpFile:        true,
+          namedListeners:      true,
+          pickupOnlyRouting:   true,
         },
       });
     });
 
-    // Groups — enriched with full metadata + Bot-1 path categorisation
+    // Groups — enriched with full metadata + Bot-1 path categorisation (IMPROVED)
     app.get("/groups", async (req, res) => {
   if (!sock || !botFullyOperational) {
     return res.status(503).json({ 
@@ -772,11 +773,10 @@ export async function startBot(config, log, authDir) {
             : null,
           description:      metadata.desc || null,
           owner:            metadata.owner || null,
-          isFetched:        false, // Metadata fetched but bot not in group
-          status:           "not_participating", // Bot was likely removed
+          isFetched:        false,
+          status:           "not_participating",
         });
       } catch (err) {
-        // If metadata fetch fails, the group doesn't exist or bot never joined
         groupDataMap.set(groupId, {
           id:               groupId,
           name:             "⚠️ Unknown / Removed Group",
@@ -785,13 +785,13 @@ export async function startBot(config, log, authDir) {
           description:      null,
           owner:            null,
           isFetched:        false,
-          status:           "unavailable", // Can't fetch metadata
+          status:           "unavailable",
         });
         log.warn(`⚠️  Failed to fetch metadata for ${groupId}: ${err.message}`);
       }
     }
 
-    // Step 5: Categorize ALL groups (fetched + configured)
+    // Step 5: Categorize ALL groups
     const allGroups = Array.from(groupDataMap.values());
 
     const sourceSet  = new Set(config.sourceGroupIds);
@@ -820,7 +820,6 @@ export async function startBot(config, log, authDir) {
         meta     = { city: cityRevMap.get(group.id) };
       }
 
-      // Add warning if group is configured but bot not participating
       if (category !== "other" && group.status === "not_participating") {
         label += " ⚠️ (Bot Not In Group)";
       } else if (category !== "other" && group.status === "unavailable") {
@@ -839,7 +838,7 @@ export async function startBot(config, log, authDir) {
       return (a.name || "").localeCompare(b.name || "");
     });
 
-    // Step 7: Build response with health warnings
+    // Step 7: Health warnings
     const healthWarnings = [];
     
     const missingSource = config.sourceGroupIds.filter(
@@ -896,6 +895,7 @@ export async function startBot(config, log, authDir) {
         pathA:  "source group → paid[] + city + free",
         pathB:  "freeCommon → paid[] + city",
         cities: config.configuredCities,
+        cityDetection: "pickup-only",
       },
       groups: categorized,
     });
@@ -904,7 +904,8 @@ export async function startBot(config, log, authDir) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-    // QR PNG — dynamic import so missing qrcode package doesn't crash the process
+
+    // QR PNG — dynamic import
     app.get("/qr", async (req, res) => {
       if (!latestQR) {
         return res.status(404).send("QR not available. Bot may already be connected.");
@@ -995,15 +996,14 @@ export async function startBot(config, log, authDir) {
   // ===========================================================================
 
   log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  log.info("🚀 TAXI BOT v4 STARTING (Path A/B + Full Feature Parity)");
+  log.info("🚀 TAXI BOT v4 STARTING (Path A/B OPTIMIZED)");
+  log.info("   ✅ Processing delay AFTER validation (saves 2-7s)");
   log.info("   ✅ Auth-once (Bad MAC fix)");
-  log.info("   ✅ Named listener removal (ghost listener fix)");
+  log.info("   ✅ Named listener removal");
   log.info("   ✅ QR via HTTP + terminal fallback");
-  log.info("   ✅ 5-min message age gate (logged)");
-  log.info("   ✅ Processing delay 2-7s (logged)");
-  log.info("   ✅ Verbose FP lock/unlock logs");
+  log.info("   ✅ 5-min message age gate");
   log.info("   ✅ /health + /status + /stats + /groups");
-  log.info("   ✅ Stale fingerprint cleanup");
+  log.info("   ✅ Pickup-only city routing (Path A/B)");
   log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   loadFingerprints();
