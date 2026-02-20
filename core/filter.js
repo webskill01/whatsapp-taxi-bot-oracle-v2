@@ -210,9 +210,23 @@ export function isTaxiRequest(text, keywords, ignoreList, blockedNumbers = []) {
 
   // Ignore keyword check (against raw lowercase — catches unicode/Punjabi/Hindi)
   for (const ignoreWord of ignoreList) {
-    if (originalLower.includes(ignoreWord.toLowerCase())) return false;
+    const ignoreWordLower = ignoreWord.toLowerCase();
+    
+    // Create regex with word boundaries for single words
+    // For phrases like "good morning", check as substring
+    if (ignoreWordLower.includes(' ')) {
+      // Multi-word phrase - check as substring
+      if (originalLower.includes(ignoreWordLower)) {
+        return false;
+      }
+    } else {
+      // Single word - use word boundary regex
+      const wordBoundaryRegex = new RegExp(`\\b${ignoreWordLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (wordBoundaryRegex.test(originalLower)) {
+        return false;
+      }
+    }
   }
-
   // Must have taxi keyword OR route pattern
   const hasKeyword = keywords.some((kw) => normalized.includes(kw.toLowerCase()));
   const hasRoute   = ROUTE_PATTERNS.some((pattern) => pattern.test(normalized));
