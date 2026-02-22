@@ -768,11 +768,6 @@ export async function startBot(config, log, authDir) {
           id:               groupId,
           name:             metadata.subject || "Unknown Group",
           participantCount: metadata.participants?.length || 0,
-          createdAt:        metadata.creation
-            ? new Date(metadata.creation * 1000).toISOString()
-            : null,
-          description:      metadata.desc || null,
-          owner:            metadata.owner || null,
           isFetched:        false,
           status:           "not_participating",
         });
