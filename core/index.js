@@ -737,11 +737,6 @@ export async function startBot(config, log, authDir) {
           id:               chat.id,
           name:             chat.subject || "Unknown Group",
           participantCount: chat.participants?.length || 0,
-          createdAt:        chat.creation
-            ? new Date(chat.creation * 1000).toISOString()
-            : null,
-          description:      chat.desc || null,
-          owner:            chat.owner || null,
           isFetched:        true,
         },
       ])
@@ -776,9 +771,6 @@ export async function startBot(config, log, authDir) {
           id:               groupId,
           name:             "⚠️ Unknown / Removed Group",
           participantCount: 0,
-          createdAt:        null,
-          description:      null,
-          owner:            null,
           isFetched:        false,
           status:           "unavailable",
         });
