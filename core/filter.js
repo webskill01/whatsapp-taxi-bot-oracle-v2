@@ -41,10 +41,12 @@ export function normalizeText(text) {
     .replace(/[\u{1F300}-\u{1F5FF}]/gu, "")
     .replace(/[\u{1F680}-\u{1F6FF}]/gu, "")
     .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, "")
+    .replace(/[\u{1F100}-\u{1F1DF}]/gu, "")  // Enclosed Alphanumeric Supplement (e.g. 🆓)
     .replace(/[\u{2600}-\u{26FF}]/gu, "")
     .replace(/[\u{2700}-\u{27BF}]/gu, "")
     .replace(/[\u{FE00}-\u{FE0F}]/gu, "")
     .replace(/[\u{1F900}-\u{1F9FF}]/gu, "")
+    .replace(/[*_`~]/g, "")   // Strip WhatsApp formatting symbols (* bold, _ italic, ` code, ~ strikethrough)
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -201,7 +203,7 @@ export function isTaxiRequest(text, keywords, ignoreList, blockedNumbers = []) {
   if (!text) return false;
 
   const normalized   = normalizeText(text);
-  const originalLower = text.toLowerCase();
+  const originalLower = text.toLowerCase().replace(/[*_`~]/g, ""); // strip formatting so _word_ / *word* match ignore keywords
 
   // Blocked number check
   if (blockedNumbers.length > 0 && containsBlockedNumber(text, blockedNumbers)) {
@@ -216,6 +218,11 @@ export function isTaxiRequest(text, keywords, ignoreList, blockedNumbers = []) {
     // For phrases like "good morning", check as substring
     if (ignoreWordLower.includes(' ')) {
       // Multi-word phrase - check as substring
+      if (originalLower.includes(ignoreWordLower)) {
+        return false;
+      }
+    } else if (/[^\w\s]/.test(ignoreWordLower)) {
+      // Contains non-word chars (emoji, symbols) — word boundaries don't apply, use substring
       if (originalLower.includes(ignoreWordLower)) {
         return false;
       }

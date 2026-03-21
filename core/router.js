@@ -8,7 +8,7 @@
  *
  * ROUTING (Bot-1):
  *   Path A: source group → paidCommonGroupId[] + cityTargetGroup + freeCommonGroupId
- *   Path B: freeCommonGroupId → paidCommonGroupId[] + cityTargetGroup (NOT free)
+ *   Path B: freeCommonGroupId → cityTargetGroup only (NOT paid, NOT free)
  *
  * ANTI-BAN:
  *   ✅ A1: Length-scaled typing delay (1.0-1.8s, before first send only)
@@ -47,6 +47,16 @@ const circuitBreaker = {
   isOpen:       false,
   resetTimeout: null,
 };
+
+export function resetCircuitBreaker(log) {
+  if (circuitBreaker.resetTimeout) {
+    clearTimeout(circuitBreaker.resetTimeout);
+    circuitBreaker.resetTimeout = null;
+  }
+  circuitBreaker.failureCount = 0;
+  circuitBreaker.isOpen       = false;
+  if (log) log.info("🟢 Circuit breaker reset (reconnect)");
+}
 
 // =============================================================================
 // RATE LIMITING (sliding window)
@@ -141,6 +151,11 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
     return { successCount: 0, totalTargets: targets.length };
   }
 
+  if (targets.length === 0) {
+    log.warn(`⏭️  [${label}] No targets`);
+    return { successCount: 0, totalTargets: 0 };
+  }
+
   const now          = Date.now();
   const readyTargets = targets.filter((id) => {
     const lastSend = inFlightSends.get(id);
@@ -207,6 +222,7 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
       log.info(`✅ → ${shortId}... (${((Date.now() - sendStart) / 1000).toFixed(2)}s)`);
       handleSendSuccess();
       stats.sendSuccesses++;
+      stats.sendsByGroup[groupId] = (stats.sendsByGroup[groupId] || 0) + 1;
       successCount++;
 
     } catch (error) {
@@ -218,6 +234,7 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
           log.info(`✅ → ${shortId}... (retry OK)`);
           handleSendSuccess();
           stats.sendSuccesses++;
+          stats.sendsByGroup[groupId] = (stats.sendsByGroup[groupId] || 0) + 1;
           successCount++;
         } catch (retryErr) {
           log.error(`❌ → ${shortId}... FAILED (retry) ${retryErr.message}`);
@@ -366,13 +383,16 @@ async function processPathB(sock, text, config, stats, log) {
   const detectedCity = extractPickupCity(text, config.configuredCities);
   const cityGroupId  = detectedCity ? config.cityTargetGroups[detectedCity] : null;
 
-  log.info(`🔀 PATH B ROUTING | City: ${detectedCity || "none"}`);
+  if (!cityGroupId) {
+    log.warn(`🏙️  PATH B — No city detected, message dropped | ${text.substring(0, 40)}...`);
+    stats.rejectedNoCity = (stats.rejectedNoCity || 0) + 1;
+    return { wasRouted: false };
+  }
 
-  // Build targets: paid[] + city — free is source, do NOT echo back
-  const targets  = [
-    ...config.paidCommonGroupId,
-    ...(cityGroupId ? [cityGroupId] : []),
-  ];
+  log.info(`🔀 PATH B ROUTING | City: ${detectedCity}`);
+
+  // Build targets: city only — free is source, do NOT echo back, paid excluded for Path B
+  const targets  = [cityGroupId];
   const shuffled = shuffleArray([...new Set(targets)]);
 
   const { successCount } = await sendToMultipleGroupsSequential(

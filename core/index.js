@@ -45,7 +45,7 @@ import fs       from "fs";
 import path     from "path";
 
 import { getMessageFingerprint } from "./filter.js";
-import { processMessage }        from "./router.js";
+import { processMessage, resetCircuitBreaker } from "./router.js";
 import { GLOBAL_CONFIG }         from "./globalConfig.js";
 
 // =============================================================================
@@ -98,6 +98,8 @@ export async function startBot(config, log, authDir) {
     rejectedNotMonitored:       0,
     rejectedRateLimit:          0,
     rejectedTooOld:             0,
+    rejectedNoCity:             0,
+    sendsByGroup:               {},
     sendSuccesses:              0,
     sendFailures:               0,
     reconnectCount:             0,
@@ -543,6 +545,7 @@ export async function startBot(config, log, authDir) {
           reconnectAttempts  = 0;
           lastReconnectTime  = Date.now();
           needsSettlingDelay = true;
+          resetCircuitBreaker(log);
 
           log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
           log.info("✅ WhatsApp connected");
@@ -775,6 +778,40 @@ export async function startBot(config, log, authDir) {
           status:           "unavailable",
         });
         log.warn(`⚠️  Failed to fetch metadata for ${groupId}: ${err.message}`);
+      }
+    }
+
+    // Step 4b: Re-fetch configured groups that the bulk call returned with incomplete data
+    // (empty subject or 0 participants). Done in small batches to avoid rate-limiting.
+    const incompleteGroupIds = [...allConfiguredGroupIds].filter((id) => {
+      const g = groupDataMap.get(id);
+      return g && g.isFetched && (g.name === "Unknown Group" || g.participantCount === 0);
+    });
+
+    const REFETCH_BATCH = 5;
+    const REFETCH_DELAY = 400; // ms between batches
+
+    for (let i = 0; i < incompleteGroupIds.length; i += REFETCH_BATCH) {
+      const batch = incompleteGroupIds.slice(i, i + REFETCH_BATCH);
+      await Promise.all(
+        batch.map(async (groupId) => {
+          try {
+            const metadata = await sock.groupMetadata(groupId);
+            if (metadata?.subject) {
+              groupDataMap.set(groupId, {
+                id:               groupId,
+                name:             metadata.subject,
+                participantCount: metadata.participants?.length || 0,
+                isFetched:        true,
+              });
+            }
+          } catch (err) {
+            log.warn(`⚠️  Failed to re-fetch incomplete group ${groupId}: ${err.message}`);
+          }
+        })
+      );
+      if (i + REFETCH_BATCH < incompleteGroupIds.length) {
+        await new Promise((r) => setTimeout(r, REFETCH_DELAY));
       }
     }
 
