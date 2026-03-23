@@ -273,7 +273,7 @@ async function processPathA(sock, text, sourceGroup, config, stats, log) {
 
   // Gate 2: Taxi request filter
   if (!isTaxiRequest(text, config.requestKeywords, config.ignoreIfContains, config.blockedPhoneNumbers)) {
-    log.info(`❌ NOT TAXI REQUEST (Path A) | ${text.substring(0, 40)}...`);
+    log.info(`❌ NOT TAXI REQUEST (Path A)...`);
     stats.rejectedNotTaxi++;
     return { wasRouted: false };
   }
@@ -346,7 +346,7 @@ async function processPathB(sock, text, config, stats, log) {
 
   // Gate 2: Taxi request filter
   if (!isTaxiRequest(text, config.requestKeywords, config.ignoreIfContains, config.blockedPhoneNumbers)) {
-    log.info(`❌ NOT TAXI REQUEST (Path B) | ${text.substring(0, 40)}...`);
+    log.info(`❌ NOT TAXI REQUEST (Path B)...`);
     stats.rejectedNotTaxi++;
     return { wasRouted: false };
   }
