@@ -132,6 +132,7 @@ export function loadConfig(botDir) {
     requestKeywords: GLOBAL_CONFIG.requestKeywords,
     ignoreIfContains: GLOBAL_CONFIG.ignoreIfContains,
     blockedPhoneNumbers: GLOBAL_CONFIG.blockedPhoneNumbers,
+    blockedSenders: GLOBAL_CONFIG.blockedSenders,
     rateLimits: GLOBAL_CONFIG.rateLimits,
     validation: GLOBAL_CONFIG.validation,
     humanBehavior: GLOBAL_CONFIG.humanBehavior,
@@ -186,6 +187,7 @@ export function loadConfig(botDir) {
   console.log(`✅ Keywords:       ${mergedConfig.requestKeywords.length}`);
   console.log(`✅ Ignore List:    ${mergedConfig.ignoreIfContains.length}`);
   console.log(`✅ Blocked Nums:   ${mergedConfig.blockedPhoneNumbers.length}`);
+  console.log(`✅ Blocked Senders: ${mergedConfig.blockedSenders.length}`);
   console.log(`✅ Rate Limits:    ${mergedConfig.rateLimits.hourly}/hour, ${mergedConfig.rateLimits.daily}/day`);
   console.log(`✅ Stats Port:     ${ENV.STATS_PORT}`);
   console.log(`✅ Anti-Ban:       10-layer protection enabled`);

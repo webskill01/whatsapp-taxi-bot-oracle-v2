@@ -175,6 +175,18 @@ export const GLOBAL_CONFIG = {
     ],
 
   // ==========================================================================
+  // GLOBALLY BLOCKED SENDERS
+  // Messages from these WhatsApp numbers are completely ignored by all bots.
+  // Unlike blockedPhoneNumbers (which checks message text), this blocks the
+  // SENDER — every message they send from any group is dropped before processing.
+  // Format: 10-digit number only (e.g. "9876543210"). Country code 91 is
+  // handled automatically during matching — do NOT include it here.
+  // ==========================================================================
+  blockedSenders: [
+    
+  ],
+
+  // ==========================================================================
   // 🔒 RATE LIMITS
   // ==========================================================================
   rateLimits: {

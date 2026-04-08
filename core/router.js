@@ -145,7 +145,7 @@ function shuffleArray(arr) {
 // SEQUENTIAL SEND LOOP
 // =============================================================================
 
-async function sendToMultipleGroupsSequential(sock, targets, text, label, stats, log) {
+async function sendToMultipleGroupsSequential(sock, targets, text, label, stats, log, sentGroups = null) {
   if (circuitBreaker.isOpen) {
     log.warn("🔴 Circuit breaker OPEN — aborting send");
     return { successCount: 0, totalTargets: targets.length };
@@ -156,8 +156,17 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
     return { successCount: 0, totalTargets: 0 };
   }
 
+  // Filter out groups already sent to in this message's routing cycle
+  const dedupedTargets = sentGroups
+    ? targets.filter((groupId) => !sentGroups.has(groupId))
+    : targets;
+
+  if (dedupedTargets.length < targets.length) {
+    log.info(`[${label}] Skipped ${targets.length - dedupedTargets.length} target(s) already sent by another pipeline`);
+  }
+
   const now          = Date.now();
-  const readyTargets = targets.filter((id) => {
+  const readyTargets = dedupedTargets.filter((id) => {
     const lastSend = inFlightSends.get(id);
     return !lastSend || now - lastSend >= GLOBAL_CONFIG.deduplication.sendCooldown;
   });
@@ -224,6 +233,7 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
       stats.sendSuccesses++;
       stats.sendsByGroup[groupId] = (stats.sendsByGroup[groupId] || 0) + 1;
       successCount++;
+      if (sentGroups) sentGroups.add(groupId);
 
     } catch (error) {
       if (error.message.includes("Timeout")) {
@@ -236,6 +246,7 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
           stats.sendSuccesses++;
           stats.sendsByGroup[groupId] = (stats.sendsByGroup[groupId] || 0) + 1;
           successCount++;
+          if (sentGroups) sentGroups.add(groupId);
         } catch (retryErr) {
           log.error(`❌ → ${shortId}... FAILED (retry) ${retryErr.message}`);
           handleSendFailure(log);
@@ -259,7 +270,7 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
 // PATH A — Source group → Paid[] + City + Free (WITH PROCESSING DELAY)
 // =============================================================================
 
-async function processPathA(sock, text, sourceGroup, config, stats, log) {
+async function processPathA(sock, text, sourceGroup, config, stats, log, sentGroups) {
   // ═══════════════════════════════════════════════════════════════════════════
   // VALIDATION CHECKS (fast — no delays yet)
   // ═══════════════════════════════════════════════════════════════════════════
@@ -321,7 +332,7 @@ async function processPathA(sock, text, sourceGroup, config, stats, log) {
   const shuffled = shuffleArray([...new Set(targets)]);
 
   const { successCount } = await sendToMultipleGroupsSequential(
-    sock, shuffled, text, `PathA-${detectedCity || "noCity"}`, stats, log
+    sock, shuffled, text, `PathA-${detectedCity || "noCity"}`, stats, log, sentGroups
   );
 
   log.info(`✅ PATH A DONE: ${successCount}/${shuffled.length} | City: ${detectedCity || "none"} | ${rateLimitTimestamps.hourly.length}/${GLOBAL_CONFIG.rateLimits.hourly}h`);
@@ -332,7 +343,7 @@ async function processPathA(sock, text, sourceGroup, config, stats, log) {
 // PATH B — Free common group → Paid[] + City (WITH PROCESSING DELAY)
 // =============================================================================
 
-async function processPathB(sock, text, config, stats, log) {
+async function processPathB(sock, text, config, stats, log, sentGroups) {
   // ═══════════════════════════════════════════════════════════════════════════
   // VALIDATION CHECKS (fast — no delays yet)
   // ═══════════════════════════════════════════════════════════════════════════
@@ -396,7 +407,7 @@ async function processPathB(sock, text, config, stats, log) {
   const shuffled = shuffleArray([...new Set(targets)]);
 
   const { successCount } = await sendToMultipleGroupsSequential(
-    sock, shuffled, text, `PathB-${detectedCity || "noCity"}`, stats, log
+    sock, shuffled, text, `PathB-${detectedCity || "noCity"}`, stats, log, sentGroups
   );
 
   log.info(`✅ PATH B DONE: ${successCount}/${shuffled.length} | City: ${detectedCity || "none"} | ${rateLimitTimestamps.hourly.length}/${GLOBAL_CONFIG.rateLimits.hourly}h`);
@@ -419,13 +430,15 @@ export async function processMessage(sock, text, sourceGroup, isPathA, config, s
 
     log.info(`🔀 Router: Path ${isPathA ? "A" : "B"} | ${sourceGroup.substring(0, 18)}...`);
 
+    const sentGroups = new Set(); // Cross-pipeline dedup: skip groups already sent to
+
     if (isPathA) {
-      const result = await processPathA(sock, text, sourceGroup, config, stats, log);
+      const result = await processPathA(sock, text, sourceGroup, config, stats, log, sentGroups);
       return { ...result, path: "A" };
     }
 
     // Path B — freeCommonGroup
-    const result = await processPathB(sock, text, config, stats, log);
+    const result = await processPathB(sock, text, config, stats, log, sentGroups);
     return { ...result, path: "B" };
 
   } catch (error) {

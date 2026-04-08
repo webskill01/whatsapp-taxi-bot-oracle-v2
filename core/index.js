@@ -94,6 +94,7 @@ export async function startBot(config, log, authDir) {
     rejectedFromMe:             0,
     rejectedBotSender:          0,
     rejectedBlockedNumber:      0,
+    rejectedBlockedSender:      0,
     rejectedByReconnectAgeGate: 0,
     rejectedNotMonitored:       0,
     rejectedRateLimit:          0,
@@ -299,6 +300,16 @@ export async function startBot(config, log, authDir) {
     ) {
       stats.rejectedBotSender++;
       return;
+    }
+
+    // ── Blocked sender check (before any text processing) ──
+    if (participantPhone && config.blockedSenders && config.blockedSenders.length > 0) {
+      const normalizedSender = normalizePhone(participantPhone);
+      if (config.blockedSenders.some(blocked => normalizePhone(blocked) === normalizedSender)) {
+        stats.rejectedBlockedSender = (stats.rejectedBlockedSender || 0) + 1;
+        log.warn(`BLOCKED SENDER: ${participantPhone}`);
+        return;
+      }
     }
 
     // ── Min length ──

@@ -36,3 +36,5 @@ admin-groups.json
 /taxi-groups.json
 core/index.js.back
 core/router.js.back
+
+docs/
