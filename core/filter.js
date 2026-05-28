@@ -89,16 +89,24 @@ export function hasPhoneNumber(text) {
 export function containsBlockedNumber(text, blockedNumbers) {
   if (!text || !blockedNumbers || blockedNumbers.length === 0) return false;
 
-  const normalizedText = text.replace(/\D/g, "");
+  // Build O(1) lookup set of normalized 10-digit blocked numbers
+  const blockedSet = new Set(
+    blockedNumbers
+      .map(n => n.replace(/\D/g, "").slice(-10))
+      .filter(n => n.length === 10)
+  );
 
-  for (const blockedNumber of blockedNumbers) {
-    const normalizedBlocked = blockedNumber.replace(/\D/g, "");
-    if (!normalizedBlocked) continue;
+  // Find phone-number-like sequences: 7-15 digit groups with optional separators
+  // Covers: 7508815731, 75088-15731, +91 7508815731, 917508815731, etc.
+  // Using {4,13} for middle to detect 6-15 char total sequences (minimum 10 digits)
+  const candidates = text.match(/\d[\d\s\-\.()]{4,13}\d/g) || [];
 
-    if (normalizedText.includes(normalizedBlocked)) return true;
-
-    const withCountryCode = "91" + normalizedBlocked;
-    if (normalizedText.includes(withCountryCode)) return true;
+  for (const candidate of candidates) {
+    const digits = candidate.replace(/\D/g, "");
+    if (digits.length >= 10) {
+      const normalized = digits.slice(-10); // strips country code prefix automatically
+      if (blockedSet.has(normalized)) return true;
+    }
   }
 
   return false;
