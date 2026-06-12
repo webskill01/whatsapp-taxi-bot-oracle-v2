@@ -17,6 +17,9 @@ npm-debug.log*
 # Forwarded messages cache
 .forwarded-messages.json
 
+# Volatile block/ignore data (identical across bots/VMs, copied manually, never committed)
+core/blocked-data.json
+
 # OS
 .DS_Store
 Thumbs.db

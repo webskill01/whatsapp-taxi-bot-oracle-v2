@@ -211,7 +211,11 @@ export function isTaxiRequest(text, keywords, ignoreList, blockedNumbers = []) {
   if (!text) return false;
 
   const normalized   = normalizeText(text);
-  const originalLower = text.toLowerCase().replace(/[*_`~]/g, ""); // strip formatting so _word_ / *word* match ignore keywords
+  // NFC-normalize so precomposed and decomposed (nukta) Hindi/Punjabi forms
+  // collapse to one canonical form before matching ignore keywords. Without this,
+  // e.g. खड़ी typed with a combining nukta (U+093C) would NOT match the same word
+  // typed with the precomposed character (U+095C), letting spam leak through.
+  const originalLower = text.normalize("NFC").toLowerCase().replace(/[*_`~]/g, ""); // strip formatting so _word_ / *word* match ignore keywords
 
   // Blocked number check
   if (blockedNumbers.length > 0 && containsBlockedNumber(text, blockedNumbers)) {
@@ -220,7 +224,7 @@ export function isTaxiRequest(text, keywords, ignoreList, blockedNumbers = []) {
 
   // Ignore keyword check (against raw lowercase — catches unicode/Punjabi/Hindi)
   for (const ignoreWord of ignoreList) {
-    const ignoreWordLower = ignoreWord.toLowerCase();
+    const ignoreWordLower = ignoreWord.normalize("NFC").toLowerCase();
     
     // Create regex with word boundaries for single words
     // For phrases like "good morning", check as substring
