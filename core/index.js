@@ -47,6 +47,7 @@ import path     from "path";
 import { getMessageFingerprint } from "./filter.js";
 import { processMessage, resetCircuitBreaker } from "./router.js";
 import { GLOBAL_CONFIG }         from "./globalConfig.js";
+import { initRuntimeState }      from "./runtimeState.js";
 
 // =============================================================================
 // CONSTANTS
@@ -95,6 +96,7 @@ export async function startBot(config, log, authDir) {
     rejectedBotSender:          0,
     rejectedBlockedNumber:      0,
     rejectedBlockedSender:      0,
+    rejectedPaused:             0,
     rejectedByReconnectAgeGate: 0,
     rejectedNotMonitored:       0,
     rejectedRateLimit:          0,
@@ -861,7 +863,15 @@ export async function startBot(config, log, authDir) {
         label += " ❌ (Group Unavailable)";
       }
 
-      return { ...group, category, label, meta };
+      // Coarse role for the control panel: source / target / other. Every forward
+      // destination (paid, city, and the free-common echo) is a "target" the panel
+      // can pause individually via runtime.json disabledTargets.
+      const type =
+        category === "source" ? "source"
+        : category === "other" ? "other"
+        : "target";
+
+      return { ...group, category, type, label, meta };
     });
 
     // Step 6: Sort by category
@@ -1040,6 +1050,11 @@ export async function startBot(config, log, authDir) {
   log.info("   ✅ /health + /status + /stats + /groups");
   log.info("   ✅ Pickup-only city routing (Path A/B)");
   log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+  // Live control flags (pause / disabled target groups). Attached to config so
+  // router.js can read them; mutated in place by the runtime.json watcher — no
+  // restart needed to pause forwarding or disable a single target group.
+  config.runtime = initRuntimeState(config.botDir || process.cwd(), log);
 
   loadFingerprints();
   startStatsServer();

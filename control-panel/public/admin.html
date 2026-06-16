@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Bot Control Panel — Admin</title>
+<style>
+  :root {
+    --bg:#0b0d12; --bg2:#0f1219; --card:#161a22; --card2:#1b2029; --line:#262c38;
+    --txt:#e8eaf0; --muted:#8b93a3; --grn:#34d399; --red:#f87171; --amber:#fbbf24;
+    --blu:#60a5fa; --accent:#6366f1; --radius:14px;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; }
+  body {
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:radial-gradient(1200px 600px at 50% -10%, #161b2e 0%, var(--bg) 55%);
+    color:var(--txt); min-height:100dvh; padding-bottom:env(safe-area-inset-bottom);
+  }
+  header {
+    position:sticky; top:0; z-index:5; backdrop-filter:blur(10px);
+    background:rgba(11,13,18,.78); border-bottom:1px solid var(--line);
+    padding:14px 16px; display:flex; justify-content:space-between; align-items:center; gap:10px;
+  }
+  h1 { font-size:16px; margin:0; font-weight:650; display:flex; align-items:center; gap:8px; }
+  .tag { font-size:10px; color:var(--accent); border:1px solid #2e2f57; background:#171833; padding:2px 7px; border-radius:20px; }
+  .wrap { padding:14px; max-width:920px; margin:0 auto; }
+  .card { background:linear-gradient(180deg,var(--card),var(--bg2)); border:1px solid var(--line); border-radius:var(--radius); padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:13px; margin:0 0 2px; font-weight:600; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+  .bot { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .bot:first-child { padding-top:2px; }
+  .bot:last-child { border-bottom:none; padding-bottom:2px; }
+  .binfo { min-width:0; }
+  .name { font-weight:650; font-size:15px; display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+  .sub { color:var(--muted); font-size:12px; margin-top:3px; }
+  .badge { font-size:10px; padding:3px 9px; border-radius:20px; text-transform:uppercase; letter-spacing:.03em; font-weight:600; white-space:nowrap; }
+  .on { background:rgba(52,211,153,.14); color:var(--grn); }
+  .off { background:rgba(248,113,113,.14); color:var(--red); }
+  .warnb { background:rgba(251,191,36,.16); color:var(--amber); }
+  .dot { width:7px; height:7px; border-radius:50%; display:inline-block; }
+  .dot.on { background:var(--grn); box-shadow:0 0 8px var(--grn); }
+  .dot.off { background:var(--red); }
+
+  .actions { display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
+  button { background:var(--card2); color:var(--txt); border:1px solid var(--line); padding:9px 13px; border-radius:10px; cursor:pointer; font-size:13px; font-weight:550; transition:.12s; display:inline-flex; align-items:center; gap:5px; }
+  button:hover { background:#222836; border-color:#333b4d; }
+  button:active { transform:scale(.97); }
+  button.danger { border-color:#5b2b2b; color:#fca5a5; }
+  button.danger:hover { background:#2a1818; }
+  button.go { border-color:#235241; color:#86efac; }
+  button.go:hover { background:#15241d; }
+  input { background:#0c0f16; border:1px solid var(--line); color:var(--txt); padding:11px 12px; border-radius:10px; font-size:14px; outline:none; }
+  input:focus { border-color:var(--accent); }
+  .muted { color:var(--muted); font-size:12px; }
+
+  .grp { display:flex; justify-content:space-between; gap:10px; padding:10px; border:1px solid var(--line); border-radius:11px; margin:7px 0; align-items:center; background:var(--bg2); flex-wrap:wrap; }
+  .grp.newgrp { border-color:#2c4a36; background:rgba(52,211,153,.05); }
+  .grp.disabled { border-color:#5b2b2b; }
+  .gmeta { min-width:0; flex:1; }
+  .gname { font-size:13px; font-weight:550; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .gid { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); word-break:break-all; margin-top:3px; }
+  .pill { font-size:9px; padding:2px 7px; border-radius:20px; text-transform:uppercase; font-weight:600; }
+  .pill.source { background:rgba(96,165,250,.16); color:var(--blu); }
+  .pill.target { background:rgba(52,211,153,.14); color:var(--grn); }
+  .pill.other { background:rgba(139,147,163,.14); color:var(--muted); }
+  .gbtns { display:flex; gap:6px; flex-wrap:wrap; }
+  button.sm { padding:7px 10px; font-size:12px; }
+  .divider { border:none; border-top:1px solid var(--line); margin:14px 0 10px; }
+
+  dialog { background:var(--card); color:var(--txt); border:1px solid var(--line); border-radius:16px; max-width:600px; width:94%; padding:0; }
+  dialog::backdrop { background:rgba(0,0,0,.66); backdrop-filter:blur(2px); }
+  .dlg-head { padding:16px 16px 8px; display:flex; justify-content:space-between; align-items:center; gap:10px; position:sticky; top:0; background:var(--card); border-radius:16px 16px 0 0; }
+  .dlg-body { padding:0 16px 16px; max-height:72dvh; overflow:auto; }
+  details { margin:8px 0; border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+  summary { cursor:pointer; font-weight:550; font-size:13px; }
+
+  .statline { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .stathd { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:14px 0 6px; font-weight:600; }
+  .statgrid { display:grid; grid-template-columns:1fr auto; gap:1px; background:var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .statk { background:var(--bg2); padding:9px 12px; font-size:13px; color:var(--muted); }
+  .statv { background:var(--bg2); padding:9px 12px; font-size:13px; font-weight:600; text-align:right; font-variant-numeric:tabular-nums; }
+
+  #toast { position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom)); transform:translateX(-50%) translateY(8px); background:#1f2430; border:1px solid var(--line); padding:11px 16px; border-radius:11px; opacity:0; transition:.22s; pointer-events:none; z-index:50; max-width:90vw; font-size:13px; box-shadow:0 10px 30px rgba(0,0,0,.4); }
+  #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  img.qr { width:min(280px,72vw); border-radius:12px; margin-top:10px; }
+
+  @media (max-width:560px) {
+    .bot { flex-direction:column; align-items:stretch; }
+    .actions { justify-content:stretch; }
+    .actions button { flex:1 1 auto; justify-content:center; }
+    .stack-in { flex-direction:column; align-items:stretch; }
+    .stack-in input, .stack-in button { width:100%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎛️ Control Panel <span class="tag">admin</span></h1>
+  <button class="sm" onclick="loadBots()">⟳ Refresh</button>
+</header>
+<div class="wrap">
+  <div class="card" id="bots"><div class="muted">Loading bots…</div></div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <h2>🚫 Shared block list</h2>
+      <span class="muted" id="blockCounts"></span>
+    </div>
+    <div class="row stack-in" style="margin-top:12px">
+      <input id="numIn" placeholder="block number(s) — any format" style="flex:1;min-width:200px" />
+      <button class="go" onclick="submitBlock('number')">Block number</button>
+      <button onclick="submitBlock('sender')">Block sender</button>
+    </div>
+    <div class="row stack-in" style="margin-top:10px">
+      <input id="ignIn" placeholder="ignore phrase (e.g. khali)" style="flex:1;min-width:200px" />
+      <button onclick="submitIgnore()">Add ignore</button>
+      <button onclick="openList()">Manage list…</button>
+    </div>
+  </div>
+</div>
+
+<dialog id="pauseDlg">
+  <div class="dlg-head"><strong id="pauseTitle">Sharing</strong><button class="sm" onclick="pauseDlg.close()">✕</button></div>
+  <div class="dlg-body" id="pauseBody"></div>
+</dialog>
+<dialog id="qrDlg">
+  <div class="dlg-head"><strong id="qrTitle">QR</strong><button class="sm" onclick="qrDlg.close()">✕</button></div>
+  <div class="dlg-body" id="qrBody" style="text-align:center"></div>
+</dialog>
+<dialog id="grpDlg">
+  <div class="dlg-head"><strong id="grpTitle">Groups</strong><button class="sm" onclick="grpDlg.close()">✕</button></div>
+  <div class="dlg-body" id="grpBody"></div>
+</dialog>
+<dialog id="statsDlg">
+  <div class="dlg-head"><strong id="statsTitle">Stats</strong><button class="sm" onclick="statsDlg.close()">✕</button></div>
+  <div class="dlg-body" id="statsBody"></div>
+</dialog>
+<dialog id="listDlg">
+  <div class="dlg-head"><strong>Manage block list</strong><button class="sm" onclick="listDlg.close()">✕</button></div>
+  <div class="dlg-body" id="listBody"></div>
+</dialog>
+<div id="toast"></div>
+
+<script>
+const token = new URLSearchParams(location.search).get("token") || "";
+const H = { "x-token": token, "Content-Type": "application/json" };
+const api = (p, opt={}) => fetch(p + (p.includes("?")?"&":"?") + "token=" + token, opt).then(r=>r.json());
+const post = (p, body) => api(p, { method:"POST", headers:H, body:JSON.stringify(body||{}) });
+let qrTimer = null;
+let BOTS = [];
+
+function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),2400); }
+const esc = (s)=>String(s).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
+
+async function loadBots(){
+  const r = await api("/api/bots");
+  if (r.error){ document.getElementById("bots").innerHTML = `<div class="off">${esc(r.error)}</div>`; return; }
+  BOTS = r.bots;
+  document.getElementById("bots").innerHTML = r.bots.map(botRow).join("");
+  loadCounts();
+}
+function botRow(b){
+  const st = b.pm2.status, online = st==="online", paused = b.runtime?.paused;
+  const dis = (b.runtime?.disabledTargets||[]).length;
+  const sharingLabel = paused ? '⏸ Sharing (all off)' : dis ? `⏸ Sharing (${dis} off)` : '⏸ Sharing';
+  return `<div class="bot">
+    <div class="binfo">
+      <div class="name"><span class="dot ${online?'on':'off'}"></span>${esc(b.id)}
+        <span class="badge ${online?'on':'off'}">${esc(st)}</span>
+        ${paused?'<span class="badge warnb">paused</span>':''}
+        ${dis?`<span class="badge warnb">${dis} group off</span>`:''}
+      </div>
+      <div class="sub">port ${b.statsPort} · ${b.pm2.restarts ?? '–'} restarts</div>
+    </div>
+    <div class="actions">
+      <button class="${paused||dis?'go':''}" onclick="openPauseMenu('${b.id}')">${sharingLabel}</button>
+      <button onclick="showStats('${b.id}')">📊 Stats</button>
+      <button onclick="showGroups('${b.id}')">👥 Groups</button>
+      <button onclick="showQR('${b.id}')">📱 QR</button>
+      <button class="go" onclick="act('${b.id}','restart','${online?'Restart':'Start'} ${b.id}?')">${online?'↻ Restart':'▶ Start'}</button>
+      ${online?`<button class="danger" onclick="act('${b.id}','stop','Stop ${b.id}? It goes offline until you Start/Restart it.')">⏹ Stop</button>`:''}
+      <button class="danger" onclick="act('${b.id}','reset','RESET AUTH for ${b.id}? It logs the bot out and needs a new QR scan.')">⚠ Reset</button>
+    </div>
+  </div>`;
+}
+
+async function act(id, action, confirmMsg){
+  if (!confirm(confirmMsg)) return;
+  const r = await post(`/api/bot/${id}/${action}`, {});
+  toast(r.message || r.error || "done");
+  setTimeout(loadBots, 1500);
+}
+
+// ── Sharing submenu: whole-bot pause + per-target-group pause ──
+async function openPauseMenu(id){
+  const bot = BOTS.find(b=>b.id===id);
+  document.getElementById("pauseTitle").textContent = id + " · Sharing";
+  const body = document.getElementById("pauseBody");
+  const paused = bot?.runtime?.paused;
+  body.innerHTML = `
+    <div class="grp ${paused?'disabled':''}">
+      <div class="gmeta"><div class="gname">Entire bot</div>
+        <div class="muted">${paused?'Paused — forwarding nothing':'Forwarding active'}</div></div>
+      <button class="sm ${paused?'go':'danger'}" onclick="menuPause('${id}',${!paused})">${paused?'▶ Resume all':'⏸ Pause all'}</button>
+    </div>
+    <hr class="divider"/>
+    <div class="muted" style="margin-bottom:4px">Or pause sharing to a specific target group:</div>
+    <div id="pauseTargets"><div class="muted">Loading groups…</div></div>`;
+  pauseDlg.showModal();
+
+  const disabled = new Set(bot?.runtime?.disabledTargets || []);
+  const r = await api(`/api/bot/${id}/groups`);
+  const box = document.getElementById("pauseTargets");
+  if (!box) return; // dialog closed meanwhile
+  if (!r.groups){ box.innerHTML = `<div class="muted">${esc(r.error||'Bot offline — only whole-bot pause available')}</div>`; return; }
+  const targets = r.groups.filter(g=>g.type==='target');
+  if (!targets.length){ box.innerHTML = `<div class="muted">No target groups configured.</div>`; return; }
+  box.innerHTML = targets.map(g=>{
+    const off = disabled.has(g.id);
+    return `<div class="grp ${off?'disabled':''}">
+      <div class="gmeta"><div class="gname">${esc(g.name)} ${off?'<span class="badge warnb">off</span>':''}</div>
+        <div class="gid">${esc(g.id)}</div></div>
+      <button class="sm ${off?'go':'danger'}" onclick="menuTarget('${id}','${g.id}',${!off})">${off?'▶ Resume':'⏸ Pause'}</button>
+    </div>`;
+  }).join("");
+}
+async function menuPause(id, paused){
+  const r = await post(`/api/bot/${id}/pause`, { paused });
+  toast(r.error || (paused?'Paused entire bot':'Resumed'));
+  await loadBots(); openPauseMenu(id);
+}
+async function menuTarget(id, groupId, disabled){
+  const r = await post(`/api/bot/${id}/target`, { groupId, disabled });
+  if (r.error){ toast(r.error); return; }
+  toast(disabled?'Group sharing paused':'Group sharing resumed');
+  await loadBots(); openPauseMenu(id);
+}
+
+async function showQR(id){
+  document.getElementById("qrTitle").textContent = id + " · QR";
+  const body = document.getElementById("qrBody");
+  body.innerHTML = "<div class='muted'>Loading QR…</div>"; qrDlg.showModal();
+  const tick = async () => {
+    const r = await api(`/api/bot/${id}/qr`);
+    if (r.qr) body.innerHTML = `<div class="muted">WhatsApp → Linked devices → Link a device</div><img class="qr" src="${r.qr}"/>`;
+    else body.innerHTML = `<div class="muted">${esc(r.error||'No QR right now (bot may be connected). Use Reset to force a new one.')}</div>`;
+  };
+  await tick(); clearInterval(qrTimer); qrTimer = setInterval(tick, 4000);
+}
+qrDlg.addEventListener("close", ()=>clearInterval(qrTimer));
+
+// Live stats popup (proxied from the bot's own /stats port), same pattern as Groups.
+// Compact two-column metric grid + section headers (no raw JSON dump).
+function statGrid(pairs){
+  return `<div class="statgrid">` + pairs.map(([k,v])=>
+    `<div class="statk">${esc(k)}</div><div class="statv">${esc(v)}</div>`).join("") + `</div>`;
+}
+function fmtAgo(iso){
+  if (!iso) return "never";
+  const ms = Date.now() - Date.parse(iso); if (isNaN(ms)) return "—";
+  const m = Math.floor(ms/60000); if (m < 1) return "just now";
+  if (m < 60) return m+"m ago"; const h=Math.floor(m/60);
+  return h < 24 ? h+"h ago" : Math.floor(h/24)+"d ago";
+}
+function renderStats(r){
+  const s = r.stats || {};
+  const fail = s.sendFailures ?? 0, ok = s.sendSuccesses ?? 0;
+  const total = ok + fail;
+  const failPct = total ? ((fail/total)*100).toFixed(1)+"%" : "0%";
+  const head = `<div class="statline">
+    <span class="badge ${r.operational?'on':'off'}">${r.operational?'operational':'down'}</span>
+    <span class="muted">uptime ${esc(r.uptime||'?')}</span>
+  </div>`;
+  return head
+    + `<div class="stathd">Throughput</div>`
+    + statGrid([
+        ["Messages processed", s.totalProcessed ?? 0],
+        ["Forwarded OK", ok],
+        ["Send failures", fail],
+        ["Failure rate", failPct],
+      ])
+    + `<div class="stathd">Filtering</div>`
+    + statGrid([
+        ["Duplicates skipped", s.duplicatesSkipped ?? 0],
+        ["Replays skipped", s.replayIdsSkipped ?? 0],
+        ["Races prevented", s.racePrevented ?? 0],
+        ["Blocked-sender hits", s.rejectedBlockedSender ?? 0],
+      ])
+    + `<div class="stathd">Connection</div>`
+    + statGrid([
+        ["Reconnects", r.reconnect?.totalReconnects ?? 0],
+        ["Last reconnect", fmtAgo(r.reconnect?.lastReconnect)],
+        ["Fingerprint cache", r.cache?.fingerprintSet ?? 0],
+        ["Replay-ID cache", r.cache?.replayIdSet ?? 0],
+      ])
+    + `<div class="stathd">Routing</div>`
+    + statGrid([
+        ["Source groups", r.config?.sourceGroups ?? '—'],
+        ["Paid groups", r.config?.paidGroups ?? '—'],
+        ["City groups", r.config?.cityGroups ?? '—'],
+      ]);
+}
+let statsTimer = null;
+async function showStats(id){
+  document.getElementById("statsTitle").textContent = id + " · Stats";
+  const body = document.getElementById("statsBody");
+  body.innerHTML = "<div class='muted'>Fetching stats…</div>"; statsDlg.showModal();
+  const tick = async () => {
+    const r = await api(`/api/bot/${id}/stats`);
+    if (r.error || !r.stats){ body.innerHTML = `<div class="off">${esc(r.error||'Bot not connected')}</div>`; return; }
+    body.innerHTML = renderStats(r);
+  };
+  await tick(); clearInterval(statsTimer); statsTimer = setInterval(tick, 4000);
+}
+statsDlg.addEventListener("close", ()=>clearInterval(statsTimer));
+
+async function showGroups(id){
+  document.getElementById("grpTitle").textContent = id + " · Groups";
+  const body = document.getElementById("grpBody");
+  body.innerHTML = "<div class='muted'>Fetching groups…</div>"; grpDlg.showModal();
+  const r = await api(`/api/bot/${id}/groups`);
+  if (!r.groups){ body.innerHTML = `<div class="off">${esc(r.error||'Bot not connected')}</div>`; return; }
+  const sorted = [...r.groups].sort((a,b)=> (a.type==='other'?0:1) - (b.type==='other'?0:1));
+  body.innerHTML = `<div class="muted" style="margin-bottom:8px">${r.totalGroups} groups · ${r.breakdown.unmonitored} new/unmonitored · tap Copy ID (pause controls live under the Sharing button)</div>` +
+    sorted.map(g=>`<div class="grp ${g.type==='other'?'newgrp':''}">
+      <div class="gmeta"><div class="gname">${esc(g.name)} <span class="pill ${g.type}">${esc(g.category)}</span></div>
+        <div class="gid">${esc(g.id)}</div></div>
+      <div class="gbtns"><button class="sm" onclick="copyId('${g.id}')">Copy ID</button></div>
+    </div>`).join("");
+}
+function copyId(id){
+  navigator.clipboard?.writeText(id).then(()=>toast("Group ID copied")).catch(()=>{
+    const t=document.createElement("textarea"); t.value=id; document.body.appendChild(t); t.select();
+    document.execCommand("copy"); t.remove(); toast("Group ID copied");
+  });
+}
+
+async function loadCounts(){
+  const r = await api("/api/block/list");
+  if (r.counts) document.getElementById("blockCounts").textContent =
+    `${r.counts.blockedPhoneNumbers} nums · ${r.counts.blockedSenders} senders · ${r.counts.ignoreIfContains} ignore`;
+}
+async function submitBlock(kind){
+  const input = document.getElementById("numIn").value.trim(); if(!input) return;
+  const r = await post(`/api/block/${kind}`, { input });
+  const p=[]; if(r.added?.length)p.push(`added ${r.added.join(", ")}`);
+  if(r.dupes?.length)p.push(`already had ${r.dupes.join(", ")}`);
+  if(r.invalid?.length)p.push(`invalid ${r.invalid.join(", ")}`);
+  toast(p.join(" · ")||"nothing to do"); document.getElementById("numIn").value=""; loadCounts();
+}
+async function submitIgnore(){
+  const phrase = document.getElementById("ignIn").value.trim(); if(!phrase) return;
+  const r = await post("/api/block/ignore", { phrase });
+  toast(r.added?`added "${r.phrase}"`:(r.reason==='duplicate'?'already in list':'nothing to do'));
+  document.getElementById("ignIn").value=""; loadCounts();
+}
+async function openList(){
+  const r = await api("/api/block/list");
+  if (!r.data){ toast("admin only"); return; }
+  const section = (title, field, arr) => `<details><summary>${title} (${arr.length})</summary>
+    <div style="max-height:34dvh;overflow:auto;margin-top:8px">` +
+    [...arr].reverse().map(v=>`<div class="grp"><span class="gid">${esc(v)}</span>
+      <button class="sm danger" onclick="removeEntry('${field}','${esc(String(v)).replace(/'/g,"")}')">Remove</button></div>`).join("") + `</div></details>`;
+  document.getElementById("listBody").innerHTML =
+    section("Blocked numbers","blockedPhoneNumbers",r.data.blockedPhoneNumbers) +
+    section("Blocked senders","blockedSenders",r.data.blockedSenders) +
+    section("Ignore phrases","ignoreIfContains",r.data.ignoreIfContains);
+  listDlg.showModal();
+}
+async function removeEntry(field,value){
+  const r = await post("/api/block/remove",{field,value});
+  toast(r.removed?`removed (${r.removed})`:"not found"); openList(); loadCounts();
+}
+
+if (!token) document.getElementById("bots").innerHTML = "<div class='off'>Missing ?token= in URL</div>";
+else loadBots();
+setInterval(()=>{ if(!document.querySelector("dialog[open]")) loadBots(); }, 15000);
+</script>
+</body>
+</html>

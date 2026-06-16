@@ -13,6 +13,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { watchFile } from "fs";
 
 // =============================================================================
 // VOLATILE BLOCK / IGNORE DATA — loaded from gitignored core/blocked-data.json
@@ -186,3 +187,79 @@ export const GLOBAL_CONFIG = {
     settlingMax: 15000,          // A4: 15s ceiling
   },
 };
+
+// ============================================================================
+// HOT-RELOAD: apply blocked-data.json edits live, WITHOUT restarting the bot
+// ============================================================================
+// blocked-data.json is edited several times a day (scripts/block.js, the control
+// dashboard, or friends submitting spam numbers). Re-reading it live lets every
+// running bot pick up new blocks within ~1s — no restart, so no reconnect, no QR
+// re-scan, and no B1 reconnect-age-gate churn.
+//
+// SAFETY:
+//  • Only the DATA arrays are swapped IN PLACE. Every bot's mergedConfig holds the
+//    SAME array references (see configLoader.js), and the validation path reads
+//    config.blockedPhoneNumbers / blockedSenders / ignoreIfContains fresh on every
+//    message — so an in-place mutation is visible on the very next message.
+//  • Fail-SAFE (not fail-closed): unlike initial boot, a live reload of a
+//    missing/malformed file KEEPS the current lists and logs a warning instead of
+//    crashing a connected bot over a bad hand-edit.
+
+/**
+ * Replace the contents of GLOBAL_CONFIG's block/ignore arrays in place.
+ * Mutates length + push so external references stay valid (no reassignment).
+ */
+function applyBlockedData(data) {
+  for (const key of ["blockedPhoneNumbers", "blockedSenders", "ignoreIfContains"]) {
+    if (!Array.isArray(data[key])) {
+      throw new Error(`malformed or missing array: "${key}"`);
+    }
+  }
+
+  GLOBAL_CONFIG.blockedPhoneNumbers.length = 0;
+  GLOBAL_CONFIG.blockedPhoneNumbers.push(...data.blockedPhoneNumbers);
+
+  GLOBAL_CONFIG.blockedSenders.length = 0;
+  GLOBAL_CONFIG.blockedSenders.push(...data.blockedSenders);
+
+  // ignoreIfContains is stored mixed-case/Unicode in the file but the matcher
+  // expects NFC-normalized lowercase — re-apply the same transform as boot load.
+  GLOBAL_CONFIG.ignoreIfContains.length = 0;
+  GLOBAL_CONFIG.ignoreIfContains.push(
+    ...data.ignoreIfContains.map((k) => k.normalize("NFC").toLowerCase())
+  );
+}
+
+// watchFile (stat/mtime polling) is used instead of fs.watch because it is
+// reliable across editors and atomic full-file rewrites (writeFileSync), which
+// fs.watch reports inconsistently on Linux. 1s poll is plenty for a file edited
+// a handful of times per day.
+let _reloadDebounce = null;
+try {
+  watchFile(BLOCKED_DATA_FILE, { interval: 1000 }, (curr, prev) => {
+    // Ignore spurious events where nothing actually changed.
+    if (curr.mtimeMs === prev.mtimeMs) return;
+
+    if (_reloadDebounce) clearTimeout(_reloadDebounce);
+    _reloadDebounce = setTimeout(() => {
+      try {
+        const fresh = JSON.parse(fs.readFileSync(BLOCKED_DATA_FILE, "utf8"));
+        applyBlockedData(fresh);
+        console.log(
+          `[globalConfig] 🔄 blocked-data.json reloaded live — ` +
+            `${GLOBAL_CONFIG.blockedPhoneNumbers.length} numbers, ` +
+            `${GLOBAL_CONFIG.blockedSenders.length} senders, ` +
+            `${GLOBAL_CONFIG.ignoreIfContains.length} ignore phrases`
+        );
+      } catch (err) {
+        console.warn(
+          `[globalConfig] ⚠️  blocked-data.json reload FAILED — keeping previous lists: ${err.message}`
+        );
+      }
+    }, 300); // settle briefly in case the writer emits multiple stat ticks
+  });
+} catch (err) {
+  console.warn(
+    `[globalConfig] ⚠️  could not watch blocked-data.json (hot-reload disabled, restart still applies edits): ${err.message}`
+  );
+}

@@ -141,6 +141,24 @@ function shuffleArray(arr) {
   return shuffled;
 }
 
+/**
+ * Remove target groups disabled via runtime.json (live "stop sharing to this
+ * group" toggle from the control panel). Returns the original array untouched
+ * when nothing is disabled.
+ */
+function filterDisabledTargets(targets, runtime, log, label) {
+  const disabled = runtime?.disabledTargets;
+  if (!disabled || disabled.size === 0) return targets;
+
+  const active = targets.filter((groupId) => !disabled.has(groupId));
+  if (active.length < targets.length) {
+    log.info(
+      `🚫 [${label}] ${targets.length - active.length} target(s) disabled via runtime toggle — skipping`
+    );
+  }
+  return active;
+}
+
 // =============================================================================
 // SEQUENTIAL SEND LOOP
 // =============================================================================
@@ -329,7 +347,10 @@ async function processPathA(sock, text, sourceGroup, config, stats, log, sentGro
     ...(cityGroupId ? [cityGroupId] : []),
     config.freeCommonGroupId,
   ];
-  const shuffled = shuffleArray([...new Set(targets)]);
+  const activeTargets = filterDisabledTargets(
+    [...new Set(targets)], config.runtime, log, `PathA-${detectedCity || "noCity"}`
+  );
+  const shuffled = shuffleArray(activeTargets);
 
   const { successCount } = await sendToMultipleGroupsSequential(
     sock, shuffled, text, `PathA-${detectedCity || "noCity"}`, stats, log, sentGroups
@@ -404,7 +425,10 @@ async function processPathB(sock, text, config, stats, log, sentGroups) {
 
   // Build targets: city only — free is source, do NOT echo back, paid excluded for Path B
   const targets  = [cityGroupId];
-  const shuffled = shuffleArray([...new Set(targets)]);
+  const activeTargets = filterDisabledTargets(
+    [...new Set(targets)], config.runtime, log, `PathB-${detectedCity || "noCity"}`
+  );
+  const shuffled = shuffleArray(activeTargets);
 
   const { successCount } = await sendToMultipleGroupsSequential(
     sock, shuffled, text, `PathB-${detectedCity || "noCity"}`, stats, log, sentGroups
@@ -425,6 +449,16 @@ export async function processMessage(sock, text, sourceGroup, isPathA, config, s
   try {
     if (!text || text.trim() === "") {
       log.warn(`⚠️  processMessage called with empty text — skipping`);
+      return { wasRouted: false, path: "none" };
+    }
+
+    // ── Live pause toggle (runtime.json) ──
+    // Bot stays connected but forwards nothing while paused. Checked first so a
+    // paused bot does zero routing work. Returns wasRouted:false so the caller
+    // unlocks the fingerprint (the message can still forward once un-paused).
+    if (config.runtime?.paused) {
+      stats.rejectedPaused = (stats.rejectedPaused || 0) + 1;
+      log.info(`⏸️  Forwarding paused — message not routed`);
       return { wasRouted: false, path: "none" };
     }
 

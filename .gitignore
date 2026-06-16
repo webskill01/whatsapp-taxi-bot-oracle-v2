@@ -20,6 +20,13 @@ npm-debug.log*
 # Volatile block/ignore data (identical across bots/VMs, copied manually, never committed)
 core/blocked-data.json
 
+# Per-bot live control flags (pause / disabled targets) — runtime only, generated
+**/runtime.json
+
+# Control panel secrets — access tokens + audit log, never push
+control-panel/tokens.json
+control-panel/audit.log
+
 # OS
 .DS_Store
 Thumbs.db

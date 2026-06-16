@@ -74,5 +74,43 @@ module.exports = {
         STATS_PORT:  "3002",
       },
     },
+
+    // =========================================================================
+    // control-panel  [admin + scoped-friend dashboard — NOT a WhatsApp bot]
+    // Owns PM2 actions (restart/stop/reset), pause/disable toggles, and
+    // block-list submission. Auto-discovers the bots above from this manifest.
+    // Keep behind a cf-tunnel with Access auth. No staggered start.
+    // =========================================================================
+    {
+      name:   "control-panel",
+      script: "./control-panel/server.js",
+      cwd:    "./",
+      instances: 1,
+      exec_mode: "fork",
+
+      autorestart: true,
+      watch:       false,
+      restart_delay: 4000,
+      min_uptime:   10000,
+      max_restarts: 10,
+
+      kill_timeout: 5000,
+      kill_signal:  "SIGTERM",
+
+      max_memory_restart: "200M",
+      start_delay: 0,
+
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
+      error_file:  "./logs/control-panel-error.log",
+      out_file:    "./logs/control-panel-out.log",
+      merge_logs:  true,
+      log_type:    "raw",
+
+      env: {
+        NODE_ENV:     "production",
+        TZ:           "Asia/Kolkata",
+        CONTROL_PORT: "3000",
+      },
+    },
   ],
 };
