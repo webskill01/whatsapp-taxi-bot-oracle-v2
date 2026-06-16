@@ -31,7 +31,7 @@ import {
 import {
   existsSync, readFileSync, writeFileSync, rmSync, readdirSync, appendFileSync,
 } from "fs";
-import { randomBytes } from "crypto";
+import { randomBytes, timingSafeEqual } from "crypto";
 
 import {
   readData, writeData, addNumbersToField, addIgnorePhrase, checkNumber,
@@ -92,9 +92,40 @@ function audit(who, action, detail = "") {
 }
 
 // ============================================================================
+// OPTIONAL HTTP BASIC AUTH — a shared front-door password for when you don't
+// want to (or can't) put the panel behind Cloudflare Access. Enabled ONLY when
+// both PANEL_USER and PANEL_PASS are set (via pm2 env), so nothing is committed.
+// This gates EVERY request (pages + API) before the per-token model below, which
+// still scopes what each visitor can actually do once they're past the door.
+// ============================================================================
+const BASIC_USER = process.env.PANEL_USER || "";
+const BASIC_PASS = process.env.PANEL_PASS || "";
+const BASIC_AUTH_ON = !!(BASIC_USER && BASIC_PASS);
+
+function safeEqual(a, b) {
+  const ab = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+// ============================================================================
 // EXPRESS
 // ============================================================================
 const app = express();
+
+if (BASIC_AUTH_ON) {
+  app.use((req, res, next) => {
+    const hdr = req.headers.authorization || "";
+    const [scheme, encoded] = hdr.split(" ");
+    if (scheme === "Basic" && encoded) {
+      const [u, p] = Buffer.from(encoded, "base64").toString().split(":");
+      if (safeEqual(u, BASIC_USER) && safeEqual(p, BASIC_PASS)) return next();
+    }
+    res.set("WWW-Authenticate", 'Basic realm="Control Panel"');
+    return res.status(401).send("Authentication required");
+  });
+}
+
 app.use(express.json());
 app.use(express.static(join(__dirname, "public")));
 
@@ -369,6 +400,7 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("============================================================");
   console.log(`🎛️  Control panel listening on http://0.0.0.0:${PORT}`);
   console.log(`   Managed bots: ${BOTS.map((b) => b.id).join(", ")}`);
+  console.log(`   Basic Auth: ${BASIC_AUTH_ON ? "🔒 ON (PANEL_USER/PANEL_PASS set)" : "OFF (token-only)"}`);
   console.log("------------------------------------------------------------");
   console.log(`   ADMIN  : /admin.html?token=${TOKENS.admin}`);
   for (const b of BOTS) {
