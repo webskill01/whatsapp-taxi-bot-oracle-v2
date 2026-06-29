@@ -126,6 +126,18 @@ const who = (req) => (req.auth.role === "admin" ? "admin" : `friend:${req.auth.b
 async function pm2(action, id) {
   await execAsync(`pm2 ${action} ${id}`, { cwd: ROOT });
 }
+// Stop and CONFIRM via pm2 jlist — pm2 stop's exit code is unreliable
+// (Windows writes "^C" and exits non-zero even on success).
+async function pm2StopAndWait(id, timeoutMs = 10000) {
+  try { await pm2("stop", id); } catch { /* verify below */ }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const map = await pm2StatusMap();
+    if (!map[id] || map[id].status === "stopped") return true;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
 async function pm2StatusMap() {
   try {
     const { stdout } = await execAsync("pm2 jlist", { cwd: ROOT });
@@ -196,9 +208,10 @@ app.post("/api/bot/:id/restart", requireAuth, scopeToBot, async (req, res) => {
 // to bring it back online — `pm2 restart` starts a stopped process.
 app.post("/api/bot/:id/stop", requireAuth, scopeToBot, async (req, res) => {
   try {
-    await pm2("stop", req.params.id);
+    const stopped = await pm2StopAndWait(req.params.id);
     audit(who(req), "stop", req.params.id);
-    res.json({ ok: true, message: `${req.params.id} stopped` });
+    res.json({ ok: true, message: stopped ? `${req.params.id} stopped`
+                                          : `${req.params.id} stop requested (still shutting down)` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -216,11 +229,16 @@ app.post("/api/bot/:id/stop", requireAuth, scopeToBot, async (req, res) => {
 app.post("/api/bot/:id/reset", requireAuth, scopeToBot, async (req, res) => {
   const bot = botById(req.params.id);
   try {
-    await pm2("stop", bot.id);
-    await new Promise((r) => setTimeout(r, 1500)); // let file handles release
+    const stopped = await pm2StopAndWait(bot.id);
+    if (!stopped) throw new Error("Bot did not stop in time — try Reset again");
+    await new Promise((r) => setTimeout(r, 800)); // let file handles release
 
     const authDir = join(bot.dir, "baileys_auth");
-    if (existsSync(authDir)) rmSync(authDir, { recursive: true, force: true });
+    for (let i = 0; existsSync(authDir) && i < 6; i++) {
+      try { rmSync(authDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 }); }
+      catch { await new Promise((r) => setTimeout(r, 500)); }
+    }
+    if (existsSync(authDir)) throw new Error("Could not delete baileys_auth (file locked) — try Reset again");
     for (const f of readdirSync(bot.dir)) {
       if (f.startsWith("fingerprints_") || f === ".forwarded-messages.json") {
         rmSync(join(bot.dir, f), { force: true });
@@ -281,6 +299,35 @@ app.get("/api/bot/:id/groups", requireAuth, scopeToBot, (req, res) =>
   proxyBot(botById(req.params.id), "/groups", res));
 app.get("/api/bot/:id/stats", requireAuth, scopeToBot, (req, res) =>
   proxyBot(botById(req.params.id), "/stats", res));
+
+// ── Ride analytics — read the bot's append-only rides.jsonl, aggregate by city ──
+const PERIOD_MS = { day: 86400000, week: 604800000, month: 2592000000, all: 0 };
+function aggregateRides(dir, period) {
+  const file = join(dir, "rides.jsonl");
+  const out = { period, total: 0, byCity: {} };
+  if (!existsSync(file)) return out;
+  const since = PERIOD_MS[period] ? Date.now() - PERIOD_MS[period] : 0;
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (!line) continue;
+    let r; try { r = JSON.parse(line); } catch { continue; }
+    if (r.t < since) continue;
+    out.total++;
+    out.byCity[r.city] = (out.byCity[r.city] || 0) + 1;
+  }
+  return out;
+}
+app.get("/api/bot/:id/analytics", requireAuth, scopeToBot, (req, res) => {
+  const period = PERIOD_MS[req.query.period] !== undefined ? req.query.period : "day";
+  try { res.json({ ok: true, ...aggregateRides(botById(req.params.id).dir, period) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post("/api/bot/:id/analytics/reset", requireAuth, scopeToBot, (req, res) => {
+  try {
+    writeFileSync(join(botById(req.params.id).dir, "rides.jsonl"), "", "utf8");
+    audit(who(req), "analytics-reset", req.params.id);
+    res.json({ ok: true, message: "Ride counts cleared" });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ============================================================================
 // ROUTES — shared block list (append-only for friends, full control for admin)

@@ -27,9 +27,30 @@ import {
   extractPickupCity,
   hasPhoneNumber,
   containsBlockedNumber,
+  ALL_CITIES,
 } from "./filter.js";
 
 import { GLOBAL_CONFIG } from "./globalConfig.js";
+
+import fs   from "fs";
+import path from "path";
+
+// Append the bot's branding to an outgoing ride. Rotates among config.brandingSuffixes
+// so the stamp isn't a byte-for-byte constant signature. No-op if unset/empty.
+function applyBranding(text, config) {
+  const variants = config.brandingSuffixes;
+  if (!Array.isArray(variants) || variants.length === 0) return text;
+  const pick = variants[Math.floor(Math.random() * variants.length)];
+  return `${text}\n\n${pick}`;
+}
+
+// Append-only ride log: one JSON line per forwarded ride → rides.jsonl in the bot dir.
+// Read + aggregated on demand by the control panel. Fire-and-forget; never throws.
+function logRide(config, city) {
+  if (!config.botDir) return;
+  const line = JSON.stringify({ t: Date.now(), city: city || "unknown" }) + "\n";
+  fs.appendFile(path.join(config.botDir, "rides.jsonl"), line, () => {});
+}
 
 // =============================================================================
 // MODULE-LEVEL STATE (one per process, shared across reconnects)
@@ -353,9 +374,10 @@ async function processPathA(sock, text, sourceGroup, config, stats, log, sentGro
   const shuffled = shuffleArray(activeTargets);
 
   const { successCount } = await sendToMultipleGroupsSequential(
-    sock, shuffled, text, `PathA-${detectedCity || "noCity"}`, stats, log, sentGroups
+    sock, shuffled, applyBranding(text, config), `PathA-${detectedCity || "noCity"}`, stats, log, sentGroups
   );
 
+  if (successCount > 0) logRide(config, extractPickupCity(text, ALL_CITIES));
   log.info(`✅ PATH A DONE: ${successCount}/${shuffled.length} | City: ${detectedCity || "none"} | ${rateLimitTimestamps.hourly.length}/${GLOBAL_CONFIG.rateLimits.hourly}h`);
   return { wasRouted: successCount > 0 };
 }
@@ -431,9 +453,10 @@ async function processPathB(sock, text, config, stats, log, sentGroups) {
   const shuffled = shuffleArray(activeTargets);
 
   const { successCount } = await sendToMultipleGroupsSequential(
-    sock, shuffled, text, `PathB-${detectedCity || "noCity"}`, stats, log, sentGroups
+    sock, shuffled, applyBranding(text, config), `PathB-${detectedCity || "noCity"}`, stats, log, sentGroups
   );
 
+  if (successCount > 0) logRide(config, extractPickupCity(text, ALL_CITIES));
   log.info(`✅ PATH B DONE: ${successCount}/${shuffled.length} | City: ${detectedCity || "none"} | ${rateLimitTimestamps.hourly.length}/${GLOBAL_CONFIG.rateLimits.hourly}h`);
   return { wasRouted: successCount > 0 };
 }

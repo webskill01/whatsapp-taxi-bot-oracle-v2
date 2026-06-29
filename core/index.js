@@ -594,6 +594,10 @@ export async function startBot(config, log, authDir) {
 
           destroySocket("connection closed");
 
+          // Drop any QR from the dead socket — a fresh one arrives after reconnect.
+          latestQR    = null;
+          qrTimestamp = null;
+
           // Hard exit on unrecoverable states — PM2 will restart cleanly
           if (statusCode === DisconnectReason.loggedOut) {
             log.error("❌ LOGGED OUT — delete baileys_auth/ and restart");
@@ -955,9 +959,6 @@ export async function startBot(config, log, authDir) {
       if (!latestQR) {
         return res.status(404).send("QR not available. Bot may already be connected.");
       }
-      if (Date.now() - (qrTimestamp || 0) > 20_000) {
-        return res.status(410).send("QR expired. Wait for a new one (~20s).");
-      }
       try {
         const QRCode = (await import("qrcode")).default;
         const buf = await QRCode.toBuffer(latestQR, {
@@ -976,15 +977,17 @@ export async function startBot(config, log, authDir) {
     // QR base64
     app.get("/qr/base64", async (req, res) => {
       if (!latestQR) {
-        return res.status(404).json({ error: "QR not available", qrAvailable: false });
-      }
-      if (Date.now() - (qrTimestamp || 0) > 20_000) {
-        return res.status(410).json({ error: "QR expired", qrAvailable: false });
+        return res.status(404).json({
+          error: botFullyOperational ? "Bot is connected — no QR needed"
+                                     : "QR not ready yet — bot is starting",
+          qrAvailable: false,
+          connected: botFullyOperational,
+        });
       }
       try {
         const QRCode  = (await import("qrcode")).default;
         const dataURL = await QRCode.toDataURL(latestQR, { width: 400, margin: 2 });
-        res.json({ qr: dataURL, qrAvailable: true, timestamp: qrTimestamp });
+        res.json({ qr: dataURL, qrAvailable: true, connected: false, timestamp: qrTimestamp });
       } catch (err) {
         if (err.code === "ERR_MODULE_NOT_FOUND") {
           return res.status(503).json({ error: "qrcode package not installed. Run npm install.", qrAvailable: false });

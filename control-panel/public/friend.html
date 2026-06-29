@@ -222,12 +222,22 @@ async function showStats(){
 }
 statsDlg.addEventListener("close", ()=>clearInterval(statsTimer));
 async function showQR(){
-  const box = document.getElementById("qr"); box.innerHTML = "<div class='muted'>Loading QR…</div>";
+  const box = document.getElementById("qr");
+  box.innerHTML = `<div class="muted">WhatsApp → Linked devices → Link a device</div>
+    <img id="qrImg" style="display:none"/>
+    <div id="qrNote" class="muted" style="margin-top:8px">Loading QR…</div>
+    <button id="qrRefresh" style="margin-top:10px">🔄 Refresh now</button>`;
+  const img = box.querySelector("#qrImg"), note = box.querySelector("#qrNote");
   const tick = async () => {
-    const r = await api(`/api/bot/${BOT.id}/qr`);
-    if (r.qr) box.innerHTML = `<div class="muted">WhatsApp → Linked devices → Link a device</div><img src="${r.qr}"/>`;
-    else box.innerHTML = `<div class="muted">${esc(r.error||'No QR right now (bot connected). Use Reset to force a new one.')}</div>`;
+    try {
+      const r = await api(`/api/bot/${BOT.id}/qr`);
+      if (r.qr){ img.src = r.qr; img.style.display="block"; note.textContent="Scan this QR with WhatsApp"; }
+      else if (r.connected){ img.style.display="none"; note.textContent="✅ Connected — no QR needed"; clearInterval(qrTimer); }
+      else if (img.src){ note.textContent="Refreshing… waiting for a new QR"; }   // keep last image
+      else { note.textContent = esc(r.error || "Bot is starting — waiting for QR…"); }
+    } catch { note.textContent = "Reconnecting…"; }
   };
+  box.querySelector("#qrRefresh").onclick = tick;
   await tick(); clearInterval(qrTimer); qrTimer = setInterval(tick, 4000);
 }
 async function submitBlock(){

@@ -14,7 +14,12 @@
  * ============================================================================
  */
 
-import { CITY_ALIASES } from "./cityAliases.js";
+import { CITY_ALIASES } from "./cityAliases.merged.js";
+
+// Every canonical city the alias map knows (60+), for analytics that should count
+// ALL pickup cities — not just the bot's routed cityTargetGroups. Routing still
+// uses configuredCities; this wider list is only for the ride log.
+export const ALL_CITIES = [...new Set(Object.values(CITY_ALIASES))];
 
 // =============================================================================
 // ROUTE PATTERNS  — used in isTaxiRequest() as secondary gate

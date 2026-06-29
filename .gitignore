@@ -23,6 +23,9 @@ core/blocked-data.json
 # Per-bot live control flags (pause / disabled targets) — runtime only, generated
 **/runtime.json
 
+# Per-bot ride analytics log — append-only, generated at runtime
+**/rides.jsonl
+
 # Control panel secrets — access tokens + audit log, never push
 control-panel/tokens.json
 control-panel/audit.log

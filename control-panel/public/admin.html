@@ -137,6 +137,10 @@
   <div class="dlg-head"><strong id="statsTitle">Stats</strong><button class="sm" onclick="statsDlg.close()">✕</button></div>
   <div class="dlg-body" id="statsBody"></div>
 </dialog>
+<dialog id="anaDlg">
+  <div class="dlg-head"><strong id="anaTitle">Rides</strong><button class="sm" onclick="anaDlg.close()">✕</button></div>
+  <div class="dlg-body" id="anaBody"></div>
+</dialog>
 <dialog id="listDlg">
   <div class="dlg-head"><strong>Manage block list</strong><button class="sm" onclick="listDlg.close()">✕</button></div>
   <div class="dlg-body" id="listBody"></div>
@@ -177,6 +181,7 @@ function botRow(b){
     <div class="actions">
       <button class="${paused||dis?'go':''}" onclick="openPauseMenu('${b.id}')">${sharingLabel}</button>
       <button onclick="showStats('${b.id}')">📊 Stats</button>
+      <button onclick="showAnalytics('${b.id}')">📈 Rides</button>
       <button onclick="showGroups('${b.id}')">👥 Groups</button>
       <button onclick="showQR('${b.id}')">📱 QR</button>
       <button class="go" onclick="act('${b.id}','restart','${online?'Restart':'Start'} ${b.id}?')">${online?'↻ Restart':'▶ Start'}</button>
@@ -190,6 +195,7 @@ async function act(id, action, confirmMsg){
   if (!confirm(confirmMsg)) return;
   const r = await post(`/api/bot/${id}/${action}`, {});
   toast(r.message || r.error || "done");
+  if (action === "reset" && r.ok) setTimeout(() => showQR(id), 4000);
   setTimeout(loadBots, 1500);
 }
 
@@ -238,15 +244,52 @@ async function menuTarget(id, groupId, disabled){
   await loadBots(); openPauseMenu(id);
 }
 
+// ── Ride analytics: rides per city, per period, resettable ──
+let anaId = null, anaPeriod = "day";
+function showAnalytics(id){ anaId = id; anaPeriod = "day";
+  document.getElementById("anaTitle").textContent = id + " · Rides"; anaDlg.showModal(); renderAnalytics(); }
+function setAnaPeriod(p){ anaPeriod = p; renderAnalytics(); }
+async function resetAnalytics(){
+  if (!confirm("Clear all ride counts for " + anaId + "? This cannot be undone.")) return;
+  const r = await post(`/api/bot/${anaId}/analytics/reset`, {});
+  toast(r.message || r.error || "done"); renderAnalytics();
+}
+async function renderAnalytics(){
+  const body = document.getElementById("anaBody");
+  const tabs = ["day","week","month","all"].map(p =>
+    `<button class="${p===anaPeriod?'go':''}" onclick="setAnaPeriod('${p}')">${p}</button>`).join(" ");
+  body.innerHTML = `<div class="row">${tabs}</div>
+    <div id="anaData" class="muted" style="margin-top:12px">Loading…</div>
+    <button class="danger" style="margin-top:14px" onclick="resetAnalytics()">🗑 Reset counts</button>`;
+  const r = await api(`/api/bot/${anaId}/analytics?period=${anaPeriod}`);
+  const data = document.getElementById("anaData");
+  if (r.error){ data.innerHTML = `<div class="off">${esc(r.error)}</div>`; return; }
+  const cities = Object.entries(r.byCity).sort((a,b)=>b[1]-a[1]);
+  if (!cities.length){ data.innerHTML = `<div class="muted">No rides in this period.</div>`; return; }
+  data.innerHTML = `<div style="font-weight:600;margin-bottom:6px">Total: ${r.total} rides</div>`
+    + cities.map(([c,n]) =>
+        `<div class="grp"><div class="gname">${esc(c)}</div><div class="gname">${n}</div></div>`).join("");
+}
+
 async function showQR(id){
   document.getElementById("qrTitle").textContent = id + " · QR";
-  const body = document.getElementById("qrBody");
-  body.innerHTML = "<div class='muted'>Loading QR…</div>"; qrDlg.showModal();
+  const box = document.getElementById("qrBody");
+  box.innerHTML = `<div class="muted">WhatsApp → Linked devices → Link a device</div>
+    <img id="qrImg" class="qr" style="display:none"/>
+    <div id="qrNote" class="muted" style="margin-top:8px">Loading QR…</div>
+    <button id="qrRefresh" style="margin-top:10px">🔄 Refresh now</button>`;
+  qrDlg.showModal();
+  const img = box.querySelector("#qrImg"), note = box.querySelector("#qrNote");
   const tick = async () => {
-    const r = await api(`/api/bot/${id}/qr`);
-    if (r.qr) body.innerHTML = `<div class="muted">WhatsApp → Linked devices → Link a device</div><img class="qr" src="${r.qr}"/>`;
-    else body.innerHTML = `<div class="muted">${esc(r.error||'No QR right now (bot may be connected). Use Reset to force a new one.')}</div>`;
+    try {
+      const r = await api(`/api/bot/${id}/qr`);
+      if (r.qr){ img.src = r.qr; img.style.display="block"; note.textContent="Scan this QR with WhatsApp"; }
+      else if (r.connected){ img.style.display="none"; note.textContent="✅ Connected — no QR needed"; clearInterval(qrTimer); }
+      else if (img.src){ note.textContent="Refreshing… waiting for a new QR"; }   // keep last image
+      else { note.textContent = esc(r.error || "Bot is starting — waiting for QR…"); }
+    } catch { note.textContent = "Reconnecting…"; }
   };
+  box.querySelector("#qrRefresh").onclick = tick;
   await tick(); clearInterval(qrTimer); qrTimer = setInterval(tick, 4000);
 }
 qrDlg.addEventListener("close", ()=>clearInterval(qrTimer));
