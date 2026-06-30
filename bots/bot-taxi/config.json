@@ -5,6 +5,9 @@
 
   "_branding": "Appended to every forwarded ride. Rotated to avoid a constant bot-signature. Leave [] to disable.",
   "brandingSuffixes": [
+    "- 🚨 Forwarded Duty 🚨",
+    "- 📢 Forward Duty 📢",
+    "- 🚨 Forwarded ਡਿਊਟੀ 🚨"
   ],
 
 
