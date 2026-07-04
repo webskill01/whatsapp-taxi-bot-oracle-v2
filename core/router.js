@@ -37,11 +37,30 @@ import path from "path";
 
 // Append the bot's branding to an outgoing ride. Rotates among config.brandingSuffixes
 // so the stamp isn't a byte-for-byte constant signature. No-op if unset/empty.
-function applyBranding(text, config) {
+//
+// Idempotent: strips any branding already present (from a previous forward that
+// got reposted back into a source group) before appending exactly one. Without
+// this a re-entering message stacks 2..N suffixes — the fingerprint dedup can't
+// catch it because each appended suffix changes the text.
+export function applyBranding(text, config) {
   const variants = config.brandingSuffixes;
   if (!Array.isArray(variants) || variants.length === 0) return text;
+
+  // Peel off any trailing suffix (any variant, repeated) plus its leading blank line.
+  let base = text.replace(/\s+$/, "");
+  let peeled = true;
+  while (peeled) {
+    peeled = false;
+    for (const v of variants) {
+      if (base.endsWith(v)) {
+        base   = base.slice(0, -v.length).replace(/\s+$/, "");
+        peeled = true;
+      }
+    }
+  }
+
   const pick = variants[Math.floor(Math.random() * variants.length)];
-  return `${text}\n\n${pick}`;
+  return `${base}\n\n${pick}`;
 }
 
 // Append-only ride log: one JSON line per forwarded ride → rides.jsonl in the bot dir.
