@@ -1,0 +1,7 @@
+[
+  {
+    "name": "other-vps",
+    "url": "https://panel.example.com",
+    "token": "<the OTHER panel's admin token, from its control-panel/tokens.json>"
+  }
+]

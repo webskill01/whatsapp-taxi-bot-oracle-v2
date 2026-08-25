@@ -449,37 +449,82 @@ app.post("/api/bot/:id/config/group", requireAuth, requireAdmin, scopeToBot, (re
 });
 
 // ============================================================================
+// PEER MIRRORING — keep the block list identical across VPSs
+// ============================================================================
+// The two deployments live on different servers with their own blocked-data.json.
+// Rather than syncing files, every block-list WRITE is replayed to each peer's
+// panel through the same authenticated API this one exposes. Peers are listed in
+// control-panel/peers.json (gitignored, read per request so edits need no
+// restart):  [{ "name": "multibot", "url": "https://...", "token": "<their admin token>" }]
+//
+// The x-mirror header stops the replay from bouncing back. A peer that is down
+// simply does not receive that entry — the response says so, and you re-submit.
+// ponytail: fire-and-report, no retry queue. Add one only if peers are flaky.
+const PEERS_PATH = join(__dirname, "peers.json");
+
+function loadPeers() {
+  try {
+    return existsSync(PEERS_PATH) ? JSON.parse(readFileSync(PEERS_PATH, "utf8")) : [];
+  } catch (err) {
+    console.error(`peers.json unreadable — mirroring disabled: ${err.message}`);
+    return [];
+  }
+}
+
+async function mirror(req, path, body) {
+  if (req.headers["x-mirror"]) return [];        // this write already IS a mirror
+  const peers = loadPeers();
+  if (!peers.length) return [];
+  return Promise.all(peers.map(async (peer) => {
+    try {
+      const r = await fetch(`${String(peer.url).replace(/\/$/, "")}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-token": peer.token, "x-mirror": "1" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
+      });
+      return { peer: peer.name, ok: r.ok, status: r.status };
+    } catch (err) {
+      return { peer: peer.name, ok: false, error: err.message };
+    }
+  }));
+}
+
+// ============================================================================
 // ROUTES — shared block list (append-only for friends, full control for admin)
 // ============================================================================
-app.post("/api/block/number", requireAuth, (req, res) => {
+app.post("/api/block/number", requireAuth, async (req, res) => {
   try {
     const data = readData();
     const report = addNumbersToField(data, "blockedPhoneNumbers", req.body?.input || "");
     if (report.added.length) writeData(data);
     audit(who(req), "block-number", report.added.join(",") || "(none)");
-    res.json({ ok: true, ...report });
+    const peers = await mirror(req, "/api/block/number", { input: req.body?.input || "" });
+    res.json({ ok: true, ...report, peers });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-app.post("/api/block/sender", requireAuth, (req, res) => {
+app.post("/api/block/sender", requireAuth, async (req, res) => {
   try {
     const data = readData();
     const report = addNumbersToField(data, "blockedSenders", req.body?.input || "");
     if (report.added.length) writeData(data);
     audit(who(req), "block-sender", report.added.join(",") || "(none)");
-    res.json({ ok: true, ...report });
+    const peers = await mirror(req, "/api/block/sender", { input: req.body?.input || "" });
+    res.json({ ok: true, ...report, peers });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-app.post("/api/block/ignore", requireAuth, (req, res) => {
+app.post("/api/block/ignore", requireAuth, async (req, res) => {
   try {
     const data = readData();
     const report = addIgnorePhrase(data, req.body?.phrase || "");
     if (report.added) writeData(data);
     audit(who(req), "block-ignore", report.phrase || "(none)");
-    res.json({ ok: true, ...report });
+    const peers = await mirror(req, "/api/block/ignore", { phrase: req.body?.phrase || "" });
+    res.json({ ok: true, ...report, peers });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -509,7 +554,7 @@ app.get("/api/block/list", requireAuth, (req, res) => {
   }
 });
 // Remove an entry — ADMIN only (friends are append-only).
-app.post("/api/block/remove", requireAuth, requireAdmin, (req, res) => {
+app.post("/api/block/remove", requireAuth, requireAdmin, async (req, res) => {
   try {
     const field = req.body?.field;
     const value = String(req.body?.value || "");
@@ -522,7 +567,8 @@ app.post("/api/block/remove", requireAuth, requireAdmin, (req, res) => {
     const removed = before - data[field].length;
     if (removed) writeData(data);
     audit("admin", "block-remove", `${field}:${value}`);
-    res.json({ ok: true, removed });
+    const peers = await mirror(req, "/api/block/remove", { field, value });
+    res.json({ ok: true, removed, peers });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -428,18 +428,25 @@ async function loadCounts(){
   if (r.counts) document.getElementById("blockCounts").textContent =
     `${r.counts.blockedPhoneNumbers} nums · ${r.counts.blockedSenders} senders · ${r.counts.ignoreIfContains} ignore`;
 }
+// Peers are the other VPS's panel — say plainly whether the entry got there.
+function peerNote(r){
+  if (!r.peers?.length) return "";
+  const bad = r.peers.filter(x=>!x.ok).map(x=>x.peer);
+  return bad.length ? ` ⚠ NOT synced to ${bad.join(", ")}` : ` · synced to ${r.peers.map(x=>x.peer).join(", ")}`;
+}
+
 async function submitBlock(kind){
   const input = document.getElementById("numIn").value.trim(); if(!input) return;
   const r = await post(`/api/block/${kind}`, { input });
   const p=[]; if(r.added?.length)p.push(`added ${r.added.join(", ")}`);
   if(r.dupes?.length)p.push(`already had ${r.dupes.join(", ")}`);
   if(r.invalid?.length)p.push(`invalid ${r.invalid.join(", ")}`);
-  toast(p.join(" · ")||"nothing to do"); document.getElementById("numIn").value=""; loadCounts();
+  toast((p.join(" · ")||"nothing to do") + peerNote(r)); document.getElementById("numIn").value=""; loadCounts();
 }
 async function submitIgnore(){
   const phrase = document.getElementById("ignIn").value.trim(); if(!phrase) return;
   const r = await post("/api/block/ignore", { phrase });
-  toast(r.added?`added "${r.phrase}"`:(r.reason==='duplicate'?'already in list':'nothing to do'));
+  toast((r.added?`added "${r.phrase}"`:(r.reason==='duplicate'?'already in list':'nothing to do')) + peerNote(r));
   document.getElementById("ignIn").value=""; loadCounts();
 }
 async function openList(){
@@ -457,7 +464,7 @@ async function openList(){
 }
 async function removeEntry(field,value){
   const r = await post("/api/block/remove",{field,value});
-  toast(r.removed?`removed (${r.removed})`:"not found"); openList(); loadCounts();
+  toast((r.removed?`removed (${r.removed})`:"not found") + peerNote(r)); openList(); loadCounts();
 }
 
 if (!token) document.getElementById("bots").innerHTML = "<div class='off'>Missing ?token= in URL</div>";
