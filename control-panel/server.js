@@ -490,6 +490,39 @@ async function mirror(req, path, body) {
   }));
 }
 
+// Setup check: can we actually reach each peer, and is its token an ADMIN one?
+// A friend token is enough to ADD entries but not to remove them, so the answer
+// matters — it is reported per peer instead of failing silently at 3am.
+app.get("/api/peers", requireAuth, requireAdmin, async (req, res) => {
+  const peers = loadPeers();
+  const checked = await Promise.all(peers.map(async (peer) => {
+    const base = String(peer.url || "").replace(/\/$/, "");
+    try {
+      const r = await fetch(`${base}/api/block/list`, {
+        headers: { "x-token": peer.token },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) {
+        return { name: peer.name, ok: false, error: r.status === 401 ? "token rejected" : `HTTP ${r.status}` };
+      }
+      const body = await r.json();
+      return { name: peer.name, ok: true, admin: !!body.data, counts: body.counts };
+    } catch (err) {
+      return { name: peer.name, ok: false, error: err.message };
+    }
+  }));
+  const local = readData();
+  res.json({
+    ok: true,
+    peers: checked,
+    local: {
+      blockedPhoneNumbers: local.blockedPhoneNumbers.length,
+      blockedSenders: local.blockedSenders.length,
+      ignoreIfContains: local.ignoreIfContains.length,
+    },
+  });
+});
+
 // ============================================================================
 // ROUTES — shared block list (append-only for friends, full control for admin)
 // ============================================================================

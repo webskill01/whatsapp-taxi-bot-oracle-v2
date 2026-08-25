@@ -118,7 +118,9 @@
       <input id="ignIn" placeholder="ignore phrase (e.g. khali)" style="flex:1;min-width:200px" />
       <button onclick="submitIgnore()">Add ignore</button>
       <button onclick="openList()">Manage list…</button>
+      <button onclick="checkPeers()">Check sync</button>
     </div>
+    <div class="muted" id="peerStatus" style="margin-top:10px"></div>
   </div>
 </div>
 
@@ -421,6 +423,20 @@ function copyId(id){
     const t=document.createElement("textarea"); t.value=id; document.body.appendChild(t); t.select();
     document.execCommand("copy"); t.remove(); toast("Group ID copied");
   });
+}
+
+// Setup check for peers.json: reachable? token accepted? admin or friend?
+// (a friend token can add entries but not mirror removals)
+async function checkPeers(){
+  const box = document.getElementById("peerStatus");
+  box.textContent = "Checking peers…";
+  const r = await api("/api/peers");
+  if (r.error){ box.innerHTML = `<span class="off">${esc(r.error)}</span>`; return; }
+  if (!r.peers.length){ box.textContent = "No peers configured — add control-panel/peers.json to sync with the other server."; return; }
+  box.innerHTML = r.peers.map(p => p.ok
+    ? `✅ ${esc(p.name)} — ${p.admin ? "admin token" : "friend token (adds only, removals will fail)"} · ${p.counts.blockedPhoneNumbers} nums / ${p.counts.ignoreIfContains} ignore`
+    : `❌ ${esc(p.name)} — ${esc(p.error)}`).join("<br/>")
+    + `<br/><span class="muted">this server: ${r.local.blockedPhoneNumbers} nums / ${r.local.ignoreIfContains} ignore</span>`;
 }
 
 async function loadCounts(){
