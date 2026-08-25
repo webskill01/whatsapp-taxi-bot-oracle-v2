@@ -48,6 +48,45 @@ import { getMessageFingerprint } from "./filter.js";
 import { processMessage, resetCircuitBreaker } from "./router.js";
 import { GLOBAL_CONFIG }         from "./globalConfig.js";
 import { initRuntimeState }      from "./runtimeState.js";
+import { watchConfigGroups }     from "./configLoader.js";
+
+// Resolved group subjects (id -> name), persisted to <botDir>/group-names.json.
+// groupFetchAllParticipating often returns an empty subject for large accounts;
+// groupMetadata fixes it but is rate-limited, so every name we ever resolve is
+// written to disk and reused across restarts — /groups only fetches the ones it
+// has never seen.
+// ponytail: a cached name refreshes whenever WhatsApp returns a real subject
+// again; a renamed group that only ever comes back blank keeps the old name until
+// group-names.json is deleted. Delete the file to force a full re-fetch.
+const groupNameCache = new Map();
+let groupNamesPath = null;
+
+function loadGroupNames(botDir, log) {
+  groupNamesPath = path.join(botDir, "group-names.json");
+  try {
+    if (fs.existsSync(groupNamesPath)) {
+      for (const [id, name] of Object.entries(JSON.parse(fs.readFileSync(groupNamesPath, "utf8")))) {
+        groupNameCache.set(id, name);
+      }
+      log.info(`📇 Group names loaded: ${groupNameCache.size} cached`);
+    }
+  } catch (err) {
+    log.warn(`⚠️  group-names.json unreadable — starting empty: ${err.message}`);
+  }
+}
+
+function saveGroupNames(log) {
+  if (!groupNamesPath) return;
+  try {
+    fs.writeFileSync(groupNamesPath, JSON.stringify(Object.fromEntries(groupNameCache)) + "\n", "utf8");
+  } catch (err) {
+    log.warn(`⚠️  could not save group-names.json: ${err.message}`);
+  }
+}
+
+// "Unknown Group" and the ⚠️/❌ placeholders are failures, not names — never cache them.
+const isRealGroupName = (n) =>
+  typeof n === "string" && n.trim() !== "" && n !== "Unknown Group" && !/^[⚠❌]/.test(n);
 
 // =============================================================================
 // CONSTANTS
@@ -800,9 +839,23 @@ export async function startBot(config, log, authDir) {
 
     // Step 4b: Re-fetch configured groups that the bulk call returned with incomplete data
     // (empty subject or 0 participants). Done in small batches to avoid rate-limiting.
-    const incompleteGroupIds = [...allConfiguredGroupIds].filter((id) => {
+    // Reconcile with the on-disk name cache: remember every real subject we just
+    // saw, and serve the cached name for anything WhatsApp returned blank — those
+    // groups then drop out of the fetch list below (instant, zero extra calls).
+    let namesChanged = false;
+    for (const [id, g] of groupDataMap) {
+      if (isRealGroupName(g.name)) {
+        if (groupNameCache.get(id) !== g.name) { groupNameCache.set(id, g.name); namesChanged = true; }
+      } else if (groupNameCache.has(id)) {
+        g.name = groupNameCache.get(id);
+      }
+    }
+
+    const incompleteGroupIds = [...groupDataMap.keys()].filter((id) => {
       const g = groupDataMap.get(id);
-      return g && g.isFetched && (g.name === "Unknown Group" || g.participantCount === 0);
+      if (!g || !g.isFetched) return false;
+      if (g.name === "Unknown Group") return true;                        // any group missing a name
+      return allConfiguredGroupIds.has(id) && g.participantCount === 0;   // configured groups: also fix 0 members
     });
 
     const REFETCH_BATCH = 5;
@@ -815,6 +868,10 @@ export async function startBot(config, log, authDir) {
           try {
             const metadata = await sock.groupMetadata(groupId);
             if (metadata?.subject) {
+              if (groupNameCache.get(groupId) !== metadata.subject) {
+                groupNameCache.set(groupId, metadata.subject);
+                namesChanged = true;
+              }
               groupDataMap.set(groupId, {
                 id:               groupId,
                 name:             metadata.subject,
@@ -831,6 +888,8 @@ export async function startBot(config, log, authDir) {
         await new Promise((r) => setTimeout(r, REFETCH_DELAY));
       }
     }
+
+    if (namesChanged) saveGroupNames(log);
 
     // Step 5: Categorize ALL groups
     const allGroups = Array.from(groupDataMap.values());
@@ -1059,6 +1118,11 @@ export async function startBot(config, log, authDir) {
   // restart needed to pause forwarding or disable a single target group.
   config.runtime = initRuntimeState(config.botDir || process.cwd(), log);
 
+  // Live group lists — the control panel edits config.json, the bot picks the
+  // new source/paid/city groups up in ~1.3s without a restart or QR re-scan.
+  watchConfigGroups(config, log);
+
+  loadGroupNames(config.botDir || process.cwd(), log);
   loadFingerprints();
   startStatsServer();
   await connectToWhatsApp();

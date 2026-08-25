@@ -36,6 +36,13 @@ import { randomBytes } from "crypto";
 import {
   readData, writeData, addNumbersToField, addIgnorePhrase, checkNumber,
 } from "../core/blockData.js";
+import { validateGroupFields } from "../core/configLoader.js";
+import { CITY_ALIASES } from "../core/cityAliases.merged.js";
+
+// Canonical city names the routing engine understands. A city target group is
+// only useful if its key matches one of these — otherwise extractPickupCity()
+// can never return it and the group silently receives nothing.
+const CANONICAL_CITIES = [...new Set(Object.values(CITY_ALIASES))].sort();
 
 const execAsync = promisify(exec);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -327,6 +334,118 @@ app.post("/api/bot/:id/analytics/reset", requireAuth, scopeToBot, (req, res) => 
     audit(who(req), "analytics-reset", req.params.id);
     res.json({ ok: true, message: "Ride counts cleared" });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ============================================================================
+// ROUTES — live group config (ADMIN only)
+// ============================================================================
+// Adding a group used to mean: edit config.json → commit → push → pull on the VM
+// → pm2 restart. The bot now watches its own config.json (see watchConfigGroups
+// in core/configLoader.js), so writing the file here is enough — routing picks
+// the change up in ~1.3s with no restart and no QR re-scan.
+function botConfigPath(dir) { return join(dir, "config.json"); }
+function readBotConfig(dir)  { return JSON.parse(readFileSync(botConfigPath(dir), "utf8")); }
+function writeBotConfig(dir, cfg) {
+  writeFileSync(botConfigPath(dir), JSON.stringify(cfg, null, 2) + "\n", "utf8");
+}
+
+// A group may hold exactly ONE role. Source+target on the same group is a
+// forwarding loop, so adds are refused when the group is already configured.
+function currentRole(cfg, groupId) {
+  if (cfg.sourceGroupIds.includes(groupId)) return "source";
+  if (cfg.paidCommonGroupId.includes(groupId)) return "paid";
+  if (cfg.freeCommonGroupId === groupId) return "free common";
+  const city = Object.keys(cfg.cityTargetGroups).find((c) => cfg.cityTargetGroups[c] === groupId);
+  return city ? `city (${city})` : null;
+}
+
+app.get("/api/bot/:id/config", requireAuth, requireAdmin, scopeToBot, (req, res) => {
+  try {
+    const cfg = readBotConfig(botById(req.params.id).dir);
+    res.json({
+      ok: true,
+      sourceGroupIds:    cfg.sourceGroupIds,
+      paidCommonGroupId: cfg.paidCommonGroupId,
+      freeCommonGroupId: cfg.freeCommonGroupId,
+      cityTargetGroups:  cfg.cityTargetGroups,
+      cities:            CANONICAL_CITIES,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// { action:"add"|"remove", role:"source"|"paid"|"city", groupId, city? }
+app.post("/api/bot/:id/config/group", requireAuth, requireAdmin, scopeToBot, (req, res) => {
+  const bot = botById(req.params.id);
+  const action  = String(req.body?.action || "");
+  const role    = String(req.body?.role || "");
+  const groupId = String(req.body?.groupId || "").trim();
+  const city    = String(req.body?.city || "").trim();
+
+  if (!["add", "remove"].includes(action)) return res.status(400).json({ error: "action must be add or remove" });
+  if (!["source", "paid", "city"].includes(role)) return res.status(400).json({ error: "role must be source, paid or city" });
+  if (!groupId.endsWith("@g.us")) return res.status(400).json({ error: "groupId must end with @g.us" });
+
+  try {
+    const cfg = readBotConfig(bot.dir);
+    let message;
+
+    if (action === "add") {
+      const held = currentRole(cfg, groupId);
+      if (held) return res.status(400).json({ error: `Already configured as ${held} — remove it first` });
+
+      if (role === "source") {
+        cfg.sourceGroupIds.push(groupId);
+        message = `Added as source (${cfg.sourceGroupIds.length} total)`;
+      } else if (role === "paid") {
+        cfg.paidCommonGroupId.push(groupId);
+        message = `Added as paid group (${cfg.paidCommonGroupId.length} total)`;
+      } else {
+        if (!CANONICAL_CITIES.includes(city)) {
+          return res.status(400).json({ error: `Unknown city "${city}" — pick one the router recognises` });
+        }
+        if (cfg.cityTargetGroups[city]) {
+          return res.status(400).json({ error: `${city} already routes to another group — remove that one first` });
+        }
+        cfg.cityTargetGroups[city] = groupId;
+        message = `Added as city group for ${city}`;
+      }
+    } else {
+      if (role === "source") {
+        const n = cfg.sourceGroupIds.length;
+        cfg.sourceGroupIds = cfg.sourceGroupIds.filter((g) => g !== groupId);
+        if (cfg.sourceGroupIds.length === n) return res.status(404).json({ error: "Not a source group" });
+        message = `Removed from sources (${cfg.sourceGroupIds.length} left)`;
+      } else if (role === "paid") {
+        if (!cfg.paidCommonGroupId.includes(groupId)) return res.status(404).json({ error: "Not a paid group" });
+        if (cfg.paidCommonGroupId.length === 1) {
+          return res.status(400).json({ error: "Can't remove the last paid group — the bot needs at least one" });
+        }
+        cfg.paidCommonGroupId = cfg.paidCommonGroupId.filter((g) => g !== groupId);
+        message = `Removed from paid groups (${cfg.paidCommonGroupId.length} left)`;
+      } else {
+        const key = Object.keys(cfg.cityTargetGroups).find((c) => cfg.cityTargetGroups[c] === groupId);
+        if (!key) return res.status(404).json({ error: "Not a city group" });
+        if (Object.keys(cfg.cityTargetGroups).length === 1) {
+          return res.status(400).json({ error: "Can't remove the last city group — the bot needs at least one" });
+        }
+        delete cfg.cityTargetGroups[key];
+        message = `Removed city group ${key}`;
+      }
+    }
+
+    // Same validator the bot uses, so the panel can never write a config that
+    // the running bot would reject (or that would kill it on the next restart).
+    const errs = validateGroupFields(cfg);
+    if (errs.length) return res.status(400).json({ error: errs.join("; ") });
+
+    writeBotConfig(bot.dir, cfg);
+    audit(who(req), `config-${action}-${role}`, `${bot.id} ${groupId}${city ? " " + city : ""}`);
+    res.json({ ok: true, message: message + " — live in a couple of seconds" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============================================================================

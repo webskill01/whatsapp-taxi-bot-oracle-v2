@@ -67,6 +67,7 @@
   .pill.other { background:rgba(139,147,163,.14); color:var(--muted); }
   .gbtns { display:flex; gap:6px; flex-wrap:wrap; }
   button.sm { padding:7px 10px; font-size:12px; }
+  select.sm { background:var(--card2); color:var(--txt); border:1px solid var(--line); padding:7px 10px; border-radius:10px; font-size:12px; font-weight:550; cursor:pointer; }
   .divider { border:none; border-top:1px solid var(--line); margin:14px 0 10px; }
 
   dialog { background:var(--card); color:var(--txt); border:1px solid var(--line); border-radius:16px; max-width:600px; width:94%; padding:0; }
@@ -359,20 +360,51 @@ async function showStats(id){
 }
 statsDlg.addEventListener("close", ()=>clearInterval(statsTimer));
 
+let grpBotId = null, CITIES = [];
+
 async function showGroups(id){
+  grpBotId = id;
   document.getElementById("grpTitle").textContent = id + " · Groups";
   const body = document.getElementById("grpBody");
   body.innerHTML = "<div class='muted'>Fetching groups…</div>"; grpDlg.showModal();
-  const r = await api(`/api/bot/${id}/groups`);
+  const [r, cfg] = await Promise.all([
+    api(`/api/bot/${id}/groups`),
+    api(`/api/bot/${id}/config`),
+  ]);
   if (!r.groups){ body.innerHTML = `<div class="off">${esc(r.error||'Bot not connected')}</div>`; return; }
+  CITIES = cfg.cities || [];
+  // Unmonitored groups first — those are the ones you are usually here to add.
   const sorted = [...r.groups].sort((a,b)=> (a.type==='other'?0:1) - (b.type==='other'?0:1));
-  body.innerHTML = `<div class="muted" style="margin-bottom:8px">${r.totalGroups} groups · ${r.breakdown.unmonitored} new/unmonitored · tap Copy ID (pause controls live under the Sharing button)</div>` +
-    sorted.map(g=>`<div class="grp ${g.type==='other'?'newgrp':''}">
-      <div class="gmeta"><div class="gname">${esc(g.name)} <span class="pill ${g.type}">${esc(g.category)}</span></div>
-        <div class="gid">${esc(g.id)}</div></div>
-      <div class="gbtns"><button class="sm" onclick="copyId('${g.id}')">Copy ID</button></div>
-    </div>`).join("");
+  body.innerHTML = `<div class="muted" style="margin-bottom:8px">${r.totalGroups} groups · ${r.breakdown.unmonitored} new/unmonitored · add/remove applies live, no restart</div>`
+    + sorted.map(groupRow).join("");
 }
+
+function groupRow(g){
+  const btns = [`<button class="sm" onclick="copyId('${g.id}')">Copy ID</button>`];
+  if (g.category === 'other'){
+    btns.push(`<button class="sm go" onclick="cfgGroup('add','source','${g.id}')">+ Source</button>`);
+    btns.push(`<button class="sm go" onclick="cfgGroup('add','paid','${g.id}')">+ Paid</button>`);
+    btns.push(`<select class="sm" onchange="cfgGroup('add','city','${g.id}',this.value)">
+      <option value="">+ City…</option>${CITIES.map(c=>`<option>${esc(c)}</option>`).join("")}</select>`);
+  } else if (g.category !== 'free_common'){
+    // free_common is a single required field — edit it in config.json, not here.
+    btns.push(`<button class="sm danger" onclick="cfgGroup('remove','${g.category}','${g.id}')">− Remove</button>`);
+  }
+  return `<div class="grp ${g.type==='other'?'newgrp':''}">
+    <div class="gmeta"><div class="gname">${esc(g.name)} <span class="pill ${g.type}">${esc(g.category)}</span></div>
+      <div class="gid">${esc(g.id)}</div></div>
+    <div class="gbtns">${btns.join("")}</div>
+  </div>`;
+}
+
+async function cfgGroup(action, role, groupId, city){
+  if (action === 'add' && role === 'city' && !city) return;   // placeholder option
+  if (action === 'remove' && !confirm("Remove this group from " + grpBotId + "'s config?")) return;
+  const r = await post(`/api/bot/${grpBotId}/config/group`, { action, role, groupId, city });
+  toast(r.message || r.error || "done");
+  if (r.ok) showGroups(grpBotId);
+}
+
 function copyId(id){
   navigator.clipboard?.writeText(id).then(()=>toast("Group ID copied")).catch(()=>{
     const t=document.createElement("textarea"); t.value=id; document.body.appendChild(t); t.select();

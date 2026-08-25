@@ -61,58 +61,10 @@ export function loadConfig(botDir) {
     process.exit(1);
   }
 
-  if (!Array.isArray(config.sourceGroupIds)) {
-    console.error(`❌ config.sourceGroupIds must be an array`);
+  const groupErrors = validateGroupFields(config);
+  if (groupErrors.length > 0) {
+    for (const e of groupErrors) console.error("❌ " + e);
     process.exit(1);
-  }
-
-  if (
-    typeof config.freeCommonGroupId !== "string" ||
-    !config.freeCommonGroupId.endsWith("@g.us")
-  ) {
-    console.error(`❌ config.freeCommonGroupId must be a valid @g.us group ID`);
-    process.exit(1);
-  }
-
-  if (!Array.isArray(config.paidCommonGroupId) || config.paidCommonGroupId.length === 0) {
-    console.error(`❌ config.paidCommonGroupId must be a non-empty array`);
-    process.exit(1);
-  }
-
-  if (
-    typeof config.cityTargetGroups !== "object" ||
-    Array.isArray(config.cityTargetGroups) ||
-    Object.keys(config.cityTargetGroups).length === 0
-  ) {
-    console.error(`❌ config.cityTargetGroups must be a non-empty object map`);
-    process.exit(1);
-  }
-
-  // ==========================================================================
-  // VALIDATE GROUP ID FORMATS
-  // ==========================================================================
-
-  function isValidGroupId(id) {
-    return typeof id === "string" && id.endsWith("@g.us") && id.length > 10;
-  }
-
-  const invalidSourceGroups = config.sourceGroupIds.filter((id) => !isValidGroupId(id));
-  if (invalidSourceGroups.length > 0) {
-    console.error(`❌ Invalid source group IDs: ${invalidSourceGroups.join(", ")}`);
-    process.exit(1);
-  }
-
-  const invalidPaidGroups = config.paidCommonGroupId.filter((id) => !isValidGroupId(id));
-  if (invalidPaidGroups.length > 0) {
-    console.error(`❌ Invalid paidCommonGroupId entries: ${invalidPaidGroups.join(", ")}`);
-    process.exit(1);
-  }
-
-  for (const [city, groupId] of Object.entries(config.cityTargetGroups)) {
-    if (!isValidGroupId(groupId)) {
-      console.error(`❌ Invalid group ID for city "${city}": ${groupId}`);
-      process.exit(1);
-    }
   }
 
   // ==========================================================================
@@ -194,4 +146,98 @@ export function loadConfig(botDir) {
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   return { config: mergedConfig, ENV };
+}
+
+// ============================================================================
+// GROUP-FIELD VALIDATION (shared by boot + hot-reload)
+// ============================================================================
+function isValidGroupId(id) {
+  return typeof id === "string" && id.endsWith("@g.us") && id.length > 10;
+}
+
+/** Returns an array of human-readable errors; empty array = valid. */
+export function validateGroupFields(cfg) {
+  const errs = [];
+
+  if (!Array.isArray(cfg.sourceGroupIds)) {
+    errs.push("config.sourceGroupIds must be an array");
+  } else {
+    const bad = cfg.sourceGroupIds.filter((id) => !isValidGroupId(id));
+    if (bad.length) errs.push(`Invalid source group IDs: ${bad.join(", ")}`);
+  }
+
+  if (!isValidGroupId(cfg.freeCommonGroupId)) {
+    errs.push("config.freeCommonGroupId must be a valid @g.us group ID");
+  }
+
+  if (!Array.isArray(cfg.paidCommonGroupId) || cfg.paidCommonGroupId.length === 0) {
+    errs.push("config.paidCommonGroupId must be a non-empty array");
+  } else {
+    const bad = cfg.paidCommonGroupId.filter((id) => !isValidGroupId(id));
+    if (bad.length) errs.push(`Invalid paidCommonGroupId entries: ${bad.join(", ")}`);
+  }
+
+  if (
+    typeof cfg.cityTargetGroups !== "object" ||
+    cfg.cityTargetGroups === null ||
+    Array.isArray(cfg.cityTargetGroups) ||
+    Object.keys(cfg.cityTargetGroups).length === 0
+  ) {
+    errs.push("config.cityTargetGroups must be a non-empty object map");
+  } else {
+    for (const [city, gid] of Object.entries(cfg.cityTargetGroups)) {
+      if (!isValidGroupId(gid)) errs.push(`Invalid group ID for city "${city}": ${gid}`);
+    }
+  }
+
+  return errs;
+}
+
+// ============================================================================
+// HOT-RELOAD — routing group lists only (control panel writes config.json)
+// ============================================================================
+/**
+ * Watches the bot's config.json and re-applies the ROUTING GROUP fields onto the
+ * live config object in place, so adding/removing a group in the control panel
+ * takes effect with NO restart (same pattern as runtime.json / blocked-data.json).
+ *
+ * Only group fields are re-applied — botPhone, branding and env stay boot-time.
+ * A malformed or invalid edit is IGNORED (previous groups stay live) rather than
+ * crashing a running bot; boot-time validation still exits on bad config.
+ */
+export function watchConfigGroups(config, log) {
+  const configPath = path.join(config.botDir, "config.json");
+  let debounce = null;
+
+  try {
+    fs.watchFile(configPath, { interval: 1000 }, (curr, prev) => {
+      if (curr.mtimeMs === prev.mtimeMs) return;
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        let next;
+        try {
+          next = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        } catch (err) {
+          log.warn(`⚠️  config.json reload failed to parse — keeping current groups: ${err.message}`);
+          return;
+        }
+        const errs = validateGroupFields(next);
+        if (errs.length) {
+          log.warn(`⚠️  config.json reload rejected — keeping current groups: ${errs.join("; ")}`);
+          return;
+        }
+        config.sourceGroupIds    = next.sourceGroupIds;
+        config.paidCommonGroupId = next.paidCommonGroupId;
+        config.freeCommonGroupId = next.freeCommonGroupId;
+        config.cityTargetGroups  = next.cityTargetGroups;
+        config.configuredCities  = Object.keys(next.cityTargetGroups);
+        log.info(
+          `🔄 config.json reloaded — ${config.sourceGroupIds.length} source, ` +
+          `${config.paidCommonGroupId.length} paid, ${config.configuredCities.length} city groups`
+        );
+      }, 300);
+    });
+  } catch (err) {
+    log.warn(`⚠️  could not watch config.json (live group edits disabled): ${err.message}`);
+  }
 }
