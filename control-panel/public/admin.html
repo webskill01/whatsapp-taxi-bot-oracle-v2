@@ -433,10 +433,13 @@ async function checkPeers(){
   const r = await api("/api/peers");
   if (r.error){ box.innerHTML = `<span class="off">${esc(r.error)}</span>`; return; }
   if (!r.peers.length){ box.textContent = "No peers configured — add control-panel/peers.json to sync with the other server."; return; }
-  box.innerHTML = r.peers.map(p => p.ok
-    ? `✅ ${esc(p.name)} — ${p.admin ? "admin token" : "friend token (adds only, removals will fail)"} · ${p.counts.blockedPhoneNumbers} nums / ${p.counts.ignoreIfContains} ignore`
-    : `❌ ${esc(p.name)} — ${esc(p.error)}`).join("<br/>")
-    + `<br/><span class="muted">this server: ${r.local.blockedPhoneNumbers} nums / ${r.local.ignoreIfContains} ignore</span>`;
+  box.innerHTML = r.peers.map(p => {
+    if (!p.ok) return `❌ ${esc(p.name)} — ${esc(p.error)}`;
+    if (p.isSelf) return `❌ ${esc(p.name)} — this is THIS server (${esc((p.bots||[]).join(", "))}) — point peers.json at the other VPS`;
+    const who = (p.bots||[]).length ? ` [${esc(p.bots.join(", "))}]` : "";
+    return `✅ ${esc(p.name)}${who} — ${p.admin ? "admin token" : "friend token (adds only, removals will fail)"} · ${p.counts.blockedPhoneNumbers} nums / ${p.counts.ignoreIfContains} ignore`;
+  }).join("<br/>")
+    + `<br/><span class="muted">this server [${esc((r.bots||[]).join(", "))}]: ${r.local.blockedPhoneNumbers} nums / ${r.local.ignoreIfContains} ignore</span>`;
 }
 
 async function loadCounts(){

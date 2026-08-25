@@ -527,7 +527,22 @@ app.get("/api/peers", requireAuth, requireAdmin, async (req, res) => {
       const body = await peerJson(r);
       if (!body) return { name: peer.name, ok: false, error: NOT_THE_API };
       if (!body.counts) return { name: peer.name, ok: false, error: "unexpected response from peer" };
-      return { name: peer.name, ok: true, admin: !!body.data, counts: body.counts };
+      // Which bots does the peer run? Identical to ours = peers.json points at
+      // this same server, which merges a list with itself and looks healthy.
+      let peerBots = [];
+      try {
+        const br = await fetch(`${base}/api/bots`, { headers: peerHeaders(peer), signal: AbortSignal.timeout(8000) });
+        const bb = await peerJson(br);
+        peerBots = (bb?.bots || []).map((b) => b.id);
+      } catch { /* non-fatal — the counts above are the important part */ }
+      return {
+        name: peer.name,
+        ok: true,
+        admin: !!body.data,
+        counts: body.counts,
+        bots: peerBots,
+        isSelf: peerBots.length > 0 && peerBots.join() === BOTS.map((b) => b.id).join(),
+      };
     } catch (err) {
       return { name: peer.name, ok: false, error: err.message };
     }
@@ -541,6 +556,7 @@ app.get("/api/peers", requireAuth, requireAdmin, async (req, res) => {
       blockedSenders: local.blockedSenders.length,
       ignoreIfContains: local.ignoreIfContains.length,
     },
+    bots: BOTS.map((b) => b.id),
   });
 });
 
