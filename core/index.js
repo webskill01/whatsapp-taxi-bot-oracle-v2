@@ -65,10 +65,22 @@ let groupNamesPath = null;
 // lookups makes real forwards fail with rate-overlimit. So /groups resolves at
 // most a handful of names per call, one at a time, and stops entirely for a while
 // the moment WhatsApp pushes back. Names are a display nicety; sends are not.
-const NAME_FETCH_PER_REQUEST = 6;      // max groupMetadata calls per /groups hit
-const NAME_FETCH_GAP         = 1200;   // ms between them (sequential, never parallel)
-const NAME_FETCH_COOLDOWN    = 15 * 60 * 1000;
+const NAME_FETCH_GAP      = 1200;              // ms after each successful lookup
+const NAME_FETCH_COOLDOWN = 15 * 60 * 1000;    // pause everything after a rate-overlimit
+const NAME_RESOLVE_EVERY  = 20 * 1000;         // one background lookup per 20s
 let nameFetchPausedUntil = 0;
+
+// Names are resolved OUT of band: /groups never calls groupMetadata, it just
+// queues what it could not name and returns instantly from the cache. A single
+// slow timer drains the queue at ~3 lookups/minute — far under the rate limit
+// that message sending needs — and each hit is written to group-names.json.
+const pendingNameIds  = new Set();
+const attemptedNameIds = new Set();   // asked once per process; failures aren't retried
+
+function queueNameLookup(groupId) {
+  if (!groupId || groupNameCache.has(groupId) || attemptedNameIds.has(groupId)) return;
+  pendingNameIds.add(groupId);
+}
 
 export async function metadataThrottled(sock, groupId, log) {
   if (Date.now() < nameFetchPausedUntil) return null;
@@ -856,72 +868,31 @@ export async function startBot(config, log, authDir) {
       (id) => !groupDataMap.has(id)
     );
 
-    // Attempt to fetch metadata for missing groups (may fail if bot was removed).
-    // Budget-limited: a cached name is used first, and we only spend real calls
-    // while budget remains — the rest are shown as unavailable until a later open.
-    let fetchBudget = NAME_FETCH_PER_REQUEST;
+    // Configured groups the bulk call didn't return — the bot was very likely
+    // removed from them. Show the cached name if we ever had one; never fetch.
     for (const groupId of missingGroupIds) {
-      const metadata = fetchBudget > 0 ? await metadataThrottled(sock, groupId, log) : null;
-      if (metadata) fetchBudget--;
-      if (metadata?.subject) {
-        groupDataMap.set(groupId, {
-          id:               groupId,
-          name:             metadata.subject,
-          participantCount: metadata.participants?.length || 0,
-          isFetched:        false,
-          status:           "not_participating",
-        });
-      } else {
-        groupDataMap.set(groupId, {
-          id:               groupId,
-          name:             groupNameCache.get(groupId) || "⚠️ Unknown / Removed Group",
-          participantCount: 0,
-          isFetched:        false,
-          status:           "unavailable",
-        });
-      }
+      const cached = groupNameCache.get(groupId);
+      queueNameLookup(groupId);
+      groupDataMap.set(groupId, {
+        id:               groupId,
+        name:             cached || "⚠️ Unknown / Removed Group",
+        participantCount: 0,
+        isFetched:        false,
+        status:           "unavailable",
+      });
     }
 
-    // Step 4b: Re-fetch configured groups that the bulk call returned with incomplete data
-    // (empty subject or 0 participants). Done in small batches to avoid rate-limiting.
-    // Reconcile with the on-disk name cache: remember every real subject we just
-    // saw, and serve the cached name for anything WhatsApp returned blank — those
-    // groups then drop out of the fetch list below (instant, zero extra calls).
+    // Step 4b: reconcile with the on-disk name cache — remember every real subject
+    // WhatsApp just gave us, serve cached names for the blanks, and hand anything
+    // still nameless to the background resolver. No metadata calls happen here.
     let namesChanged = false;
     for (const [id, g] of groupDataMap) {
       if (isRealGroupName(g.name)) {
         if (groupNameCache.get(id) !== g.name) { groupNameCache.set(id, g.name); namesChanged = true; }
       } else if (groupNameCache.has(id)) {
         g.name = groupNameCache.get(id);
-      }
-    }
-
-    const incompleteGroupIds = [...groupDataMap.keys()].filter((id) => {
-      const g = groupDataMap.get(id);
-      if (!g || !g.isFetched) return false;
-      if (g.name === "Unknown Group") return true;                        // any group missing a name
-      return allConfiguredGroupIds.has(id) && g.participantCount === 0;   // configured groups: also fix 0 members
-    });
-
-    // Resolve the still-nameless ones one at a time, within the shared budget.
-    // Whatever is left keeps its "Unknown Group" label and gets picked up on a
-    // later panel open — each resolved name is cached to disk, so this converges.
-    for (const groupId of incompleteGroupIds) {
-      if (fetchBudget <= 0) break;
-      const metadata = await metadataThrottled(sock, groupId, log);
-      if (!metadata) break;                 // rate-limited or gone — stop for now
-      fetchBudget--;
-      if (metadata.subject) {
-        if (groupNameCache.get(groupId) !== metadata.subject) {
-          groupNameCache.set(groupId, metadata.subject);
-          namesChanged = true;
-        }
-        groupDataMap.set(groupId, {
-          id:               groupId,
-          name:             metadata.subject,
-          participantCount: metadata.participants?.length || 0,
-          isFetched:        true,
-        });
+      } else {
+        queueNameLookup(id);
       }
     }
 
@@ -1159,6 +1130,33 @@ export async function startBot(config, log, authDir) {
   watchConfigGroups(config, log);
 
   loadGroupNames(config.botDir || process.cwd(), log);
+
+  // Seed the queue with every configured group so names fill in on their own,
+  // even if nobody opens the panel.
+  for (const id of [
+    ...config.sourceGroupIds,
+    ...config.paidCommonGroupId,
+    config.freeCommonGroupId,
+    ...Object.values(config.cityTargetGroups),
+  ]) queueNameLookup(id);
+
+  setInterval(async () => {
+    if (!sock || !botFullyOperational || pendingNameIds.size === 0) return;
+    if (Date.now() < nameFetchPausedUntil) return;   // rate-limited — keep the queue intact
+    const groupId = pendingNameIds.values().next().value;
+    pendingNameIds.delete(groupId);
+    attemptedNameIds.add(groupId);
+    const md = await metadataThrottled(sock, groupId, log);
+    if (md?.subject) {
+      groupNameCache.set(groupId, md.subject);
+      saveGroupNames(log);
+    } else if (Date.now() < nameFetchPausedUntil) {
+      // the rate limit tripped on THIS call — put it back for after the cooldown
+      attemptedNameIds.delete(groupId);
+      pendingNameIds.add(groupId);
+    }
+  }, NAME_RESOLVE_EVERY).unref?.();
+
   loadFingerprints();
   startStatsServer();
   await connectToWhatsApp();

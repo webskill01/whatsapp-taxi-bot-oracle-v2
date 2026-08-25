@@ -360,19 +360,15 @@ async function showStats(id){
 }
 statsDlg.addEventListener("close", ()=>clearInterval(statsTimer));
 
-let grpBotId = null, CITIES = [];
+let grpBotId = null;
 
 async function showGroups(id){
   grpBotId = id;
   document.getElementById("grpTitle").textContent = id + " · Groups";
   const body = document.getElementById("grpBody");
   body.innerHTML = "<div class='muted'>Fetching groups…</div>"; grpDlg.showModal();
-  const [r, cfg] = await Promise.all([
-    api(`/api/bot/${id}/groups`),
-    api(`/api/bot/${id}/config`),
-  ]);
+  const r = await api(`/api/bot/${id}/groups`);
   if (!r.groups){ body.innerHTML = `<div class="off">${esc(r.error||'Bot not connected')}</div>`; return; }
-  CITIES = cfg.cities || [];
   // Unmonitored groups first — those are the ones you are usually here to add.
   const sorted = [...r.groups].sort((a,b)=> (a.type==='other'?0:1) - (b.type==='other'?0:1));
   body.innerHTML = `<div class="muted" style="margin-bottom:8px">${r.totalGroups} groups · ${r.breakdown.unmonitored} new/unmonitored · add/remove applies live, no restart</div>`
@@ -380,15 +376,14 @@ async function showGroups(id){
 }
 
 function groupRow(g){
+  // Source groups are the only ones that churn — you add new ones and drop the
+  // ones you get kicked from. Paid / city / free targets are your own groups and
+  // never change, so they get no buttons (the API still accepts them if needed).
   const btns = [`<button class="sm" onclick="copyId('${g.id}')">Copy ID</button>`];
   if (g.category === 'other'){
     btns.push(`<button class="sm go" onclick="cfgGroup('add','source','${g.id}')">+ Source</button>`);
-    btns.push(`<button class="sm go" onclick="cfgGroup('add','paid','${g.id}')">+ Paid</button>`);
-    btns.push(`<select class="sm" onchange="cfgGroup('add','city','${g.id}',this.value)">
-      <option value="">+ City…</option>${CITIES.map(c=>`<option>${esc(c)}</option>`).join("")}</select>`);
-  } else if (g.category !== 'free_common'){
-    // free_common is a single required field — edit it in config.json, not here.
-    btns.push(`<button class="sm danger" onclick="cfgGroup('remove','${g.category}','${g.id}')">− Remove</button>`);
+  } else if (g.category === 'source'){
+    btns.push(`<button class="sm danger" onclick="cfgGroup('remove','source','${g.id}')">− Remove</button>`);
   }
   return `<div class="grp ${g.type==='other'?'newgrp':''}">
     <div class="gmeta"><div class="gname">${esc(g.name)} <span class="pill ${g.type}">${esc(g.category)}</span></div>
@@ -397,10 +392,9 @@ function groupRow(g){
   </div>`;
 }
 
-async function cfgGroup(action, role, groupId, city){
-  if (action === 'add' && role === 'city' && !city) return;   // placeholder option
+async function cfgGroup(action, role, groupId){
   if (action === 'remove' && !confirm("Remove this group from " + grpBotId + "'s config?")) return;
-  const r = await post(`/api/bot/${grpBotId}/config/group`, { action, role, groupId, city });
+  const r = await post(`/api/bot/${grpBotId}/config/group`, { action, role, groupId });
   toast(r.message || r.error || "done");
   if (r.ok) showGroups(grpBotId);
 }
