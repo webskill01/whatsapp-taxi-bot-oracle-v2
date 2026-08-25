@@ -360,7 +360,7 @@ async function showStats(id){
 }
 statsDlg.addEventListener("close", ()=>clearInterval(statsTimer));
 
-let grpBotId = null;
+let grpBotId = null, GROUPS = [];
 
 async function showGroups(id){
   grpBotId = id;
@@ -369,9 +369,18 @@ async function showGroups(id){
   body.innerHTML = "<div class='muted'>Fetching groups…</div>"; grpDlg.showModal();
   const r = await api(`/api/bot/${id}/groups`);
   if (!r.groups){ body.innerHTML = `<div class="off">${esc(r.error||'Bot not connected')}</div>`; return; }
+  GROUPS = r.groups;
+  renderGroups();
+}
+
+// Re-render from the list we already hold. An add/remove changes exactly one
+// row, so refetching would make the bot re-scan every group for nothing.
+function renderGroups(){
   // Unmonitored groups first — those are the ones you are usually here to add.
-  const sorted = [...r.groups].sort((a,b)=> (a.type==='other'?0:1) - (b.type==='other'?0:1));
-  body.innerHTML = `<div class="muted" style="margin-bottom:8px">${r.totalGroups} groups · ${r.breakdown.unmonitored} new/unmonitored · add/remove applies live, no restart</div>`
+  const sorted = [...GROUPS].sort((a,b)=> (a.type==='other'?0:1) - (b.type==='other'?0:1));
+  const unmonitored = GROUPS.filter(g=>g.type==='other').length;
+  document.getElementById("grpBody").innerHTML =
+    `<div class="muted" style="margin-bottom:8px">${GROUPS.length} groups · ${unmonitored} new/unmonitored · add/remove applies live, no restart</div>`
     + sorted.map(groupRow).join("");
 }
 
@@ -396,7 +405,15 @@ async function cfgGroup(action, role, groupId){
   if (action === 'remove' && !confirm("Remove this group from " + grpBotId + "'s config?")) return;
   const r = await post(`/api/bot/${grpBotId}/config/group`, { action, role, groupId });
   toast(r.message || r.error || "done");
-  if (r.ok) showGroups(grpBotId);
+  if (!r.ok) return;
+  const g = GROUPS.find(x => x.id === groupId);
+  if (g){
+    const added = action === 'add';
+    g.category = added ? 'source' : 'other';
+    g.type     = added ? 'source' : 'other';
+    g.label    = added ? 'Source Group (Path A)' : 'Unmonitored';
+  }
+  renderGroups();
 }
 
 function copyId(id){
