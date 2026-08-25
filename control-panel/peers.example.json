@@ -2,6 +2,12 @@
   {
     "name": "other-vps",
     "url": "https://panel.example.com",
-    "token": "<the OTHER panel's admin token, from its control-panel/tokens.json>"
+    "token": "<the OTHER panel's ADMIN token, the top-level 'admin' field of its control-panel/tokens.json>",
+
+    "_headers": "OPTIONAL. Only needed if that panel sits behind Cloudflare Access or another auth proxy — without these the peer answers with an HTML login page instead of JSON. Create a CF Access service token and copy it here, then rename this key to 'headers'.",
+    "_headers_example": {
+      "CF-Access-Client-Id": "xxxx.access",
+      "CF-Access-Client-Secret": "yyyy"
+    }
   }
 ]

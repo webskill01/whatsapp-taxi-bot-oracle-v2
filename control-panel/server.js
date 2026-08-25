@@ -471,6 +471,20 @@ function loadPeers() {
   }
 }
 
+// An auth proxy in front of a peer (Cloudflare Access, a login gate) answers with
+// a 200 and an HTML page, so a 2xx alone proves nothing — the body has to be this
+// API's JSON. Peers behind Access need a service token, which goes in their
+// peers.json entry as "headers": { "CF-Access-Client-Id": "...", "CF-Access-Client-Secret": "..." }.
+function peerHeaders(peer, extra) {
+  return { "x-token": peer.token, ...(peer.headers || {}), ...extra };
+}
+
+async function peerJson(r) {
+  try { return JSON.parse(await r.text()); } catch { return null; }
+}
+
+const NOT_THE_API = "not the panel API (got a web page — auth proxy in front?)";
+
 async function mirror(req, path, body) {
   if (req.headers["x-mirror"]) return [];        // this write already IS a mirror
   const peers = loadPeers();
@@ -479,11 +493,16 @@ async function mirror(req, path, body) {
     try {
       const r = await fetch(`${String(peer.url).replace(/\/$/, "")}${path}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-token": peer.token, "x-mirror": "1" },
+        headers: peerHeaders(peer, { "Content-Type": "application/json", "x-mirror": "1" }),
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(8000),
       });
-      return { peer: peer.name, ok: r.ok, status: r.status };
+      const reply = await peerJson(r);
+      if (!r.ok) {
+        return { peer: peer.name, ok: false, error: reply?.error || (r.status === 401 ? "token rejected" : `HTTP ${r.status}`) };
+      }
+      if (!reply) return { peer: peer.name, ok: false, error: NOT_THE_API };
+      return { peer: peer.name, ok: reply.ok === true, status: r.status };
     } catch (err) {
       return { peer: peer.name, ok: false, error: err.message };
     }
@@ -499,13 +518,15 @@ app.get("/api/peers", requireAuth, requireAdmin, async (req, res) => {
     const base = String(peer.url || "").replace(/\/$/, "");
     try {
       const r = await fetch(`${base}/api/block/list`, {
-        headers: { "x-token": peer.token },
+        headers: peerHeaders(peer),
         signal: AbortSignal.timeout(8000),
       });
       if (!r.ok) {
         return { name: peer.name, ok: false, error: r.status === 401 ? "token rejected" : `HTTP ${r.status}` };
       }
-      const body = await r.json();
+      const body = await peerJson(r);
+      if (!body) return { name: peer.name, ok: false, error: NOT_THE_API };
+      if (!body.counts) return { name: peer.name, ok: false, error: "unexpected response from peer" };
       return { name: peer.name, ok: true, admin: !!body.data, counts: body.counts };
     } catch (err) {
       return { name: peer.name, ok: false, error: err.message };
