@@ -61,6 +61,32 @@ import { watchConfigGroups }     from "./configLoader.js";
 const groupNameCache = new Map();
 let groupNamesPath = null;
 
+// groupMetadata shares ONE rate budget with message sending — a burst of name
+// lookups makes real forwards fail with rate-overlimit. So /groups resolves at
+// most a handful of names per call, one at a time, and stops entirely for a while
+// the moment WhatsApp pushes back. Names are a display nicety; sends are not.
+const NAME_FETCH_PER_REQUEST = 6;      // max groupMetadata calls per /groups hit
+const NAME_FETCH_GAP         = 1200;   // ms between them (sequential, never parallel)
+const NAME_FETCH_COOLDOWN    = 15 * 60 * 1000;
+let nameFetchPausedUntil = 0;
+
+export async function metadataThrottled(sock, groupId, log) {
+  if (Date.now() < nameFetchPausedUntil) return null;
+  try {
+    const md = await sock.groupMetadata(groupId);
+    await new Promise((r) => setTimeout(r, NAME_FETCH_GAP));
+    return md;
+  } catch (err) {
+    if (/rate-overlimit/i.test(err?.message || "")) {
+      nameFetchPausedUntil = Date.now() + NAME_FETCH_COOLDOWN;
+      log.warn("⚠️  WhatsApp rate-limited group lookups — pausing name resolution for 15m");
+    } else {
+      log.warn(`⚠️  Failed to fetch metadata for ${groupId}: ${err.message}`);
+    }
+    return null;
+  }
+}
+
 function loadGroupNames(botDir, log) {
   groupNamesPath = path.join(botDir, "group-names.json");
   try {
@@ -572,6 +598,22 @@ export async function startBot(config, log, authDir) {
       log.info("✅ Socket created");
 
       // creds.update
+      // Free group names: Baileys hands us subjects whenever a group is added or
+      // renamed. Harvesting those costs zero API calls, so the cache fills itself
+      // and /groups needs fewer throttled lookups over time.
+      const harvestNames = (items) => {
+        let changed = false;
+        for (const g of items || []) {
+          if (g?.id && isRealGroupName(g.subject) && groupNameCache.get(g.id) !== g.subject) {
+            groupNameCache.set(g.id, g.subject);
+            changed = true;
+          }
+        }
+        if (changed) saveGroupNames(log);
+      };
+      sock.ev.on("groups.upsert", harvestNames);
+      sock.ev.on("groups.update", harvestNames);
+
       sock.ev.on("creds.update", async () => {
         if (saveCreds) await saveCreds();
       });
@@ -814,26 +856,29 @@ export async function startBot(config, log, authDir) {
       (id) => !groupDataMap.has(id)
     );
 
-    // Attempt to fetch metadata for missing groups (may fail if bot was removed)
+    // Attempt to fetch metadata for missing groups (may fail if bot was removed).
+    // Budget-limited: a cached name is used first, and we only spend real calls
+    // while budget remains — the rest are shown as unavailable until a later open.
+    let fetchBudget = NAME_FETCH_PER_REQUEST;
     for (const groupId of missingGroupIds) {
-      try {
-        const metadata = await sock.groupMetadata(groupId);
+      const metadata = fetchBudget > 0 ? await metadataThrottled(sock, groupId, log) : null;
+      if (metadata) fetchBudget--;
+      if (metadata?.subject) {
         groupDataMap.set(groupId, {
           id:               groupId,
-          name:             metadata.subject || "Unknown Group",
+          name:             metadata.subject,
           participantCount: metadata.participants?.length || 0,
           isFetched:        false,
           status:           "not_participating",
         });
-      } catch (err) {
+      } else {
         groupDataMap.set(groupId, {
           id:               groupId,
-          name:             "⚠️ Unknown / Removed Group",
+          name:             groupNameCache.get(groupId) || "⚠️ Unknown / Removed Group",
           participantCount: 0,
           isFetched:        false,
           status:           "unavailable",
         });
-        log.warn(`⚠️  Failed to fetch metadata for ${groupId}: ${err.message}`);
       }
     }
 
@@ -858,34 +903,25 @@ export async function startBot(config, log, authDir) {
       return allConfiguredGroupIds.has(id) && g.participantCount === 0;   // configured groups: also fix 0 members
     });
 
-    const REFETCH_BATCH = 5;
-    const REFETCH_DELAY = 400; // ms between batches
-
-    for (let i = 0; i < incompleteGroupIds.length; i += REFETCH_BATCH) {
-      const batch = incompleteGroupIds.slice(i, i + REFETCH_BATCH);
-      await Promise.all(
-        batch.map(async (groupId) => {
-          try {
-            const metadata = await sock.groupMetadata(groupId);
-            if (metadata?.subject) {
-              if (groupNameCache.get(groupId) !== metadata.subject) {
-                groupNameCache.set(groupId, metadata.subject);
-                namesChanged = true;
-              }
-              groupDataMap.set(groupId, {
-                id:               groupId,
-                name:             metadata.subject,
-                participantCount: metadata.participants?.length || 0,
-                isFetched:        true,
-              });
-            }
-          } catch (err) {
-            log.warn(`⚠️  Failed to re-fetch incomplete group ${groupId}: ${err.message}`);
-          }
-        })
-      );
-      if (i + REFETCH_BATCH < incompleteGroupIds.length) {
-        await new Promise((r) => setTimeout(r, REFETCH_DELAY));
+    // Resolve the still-nameless ones one at a time, within the shared budget.
+    // Whatever is left keeps its "Unknown Group" label and gets picked up on a
+    // later panel open — each resolved name is cached to disk, so this converges.
+    for (const groupId of incompleteGroupIds) {
+      if (fetchBudget <= 0) break;
+      const metadata = await metadataThrottled(sock, groupId, log);
+      if (!metadata) break;                 // rate-limited or gone — stop for now
+      fetchBudget--;
+      if (metadata.subject) {
+        if (groupNameCache.get(groupId) !== metadata.subject) {
+          groupNameCache.set(groupId, metadata.subject);
+          namesChanged = true;
+        }
+        groupDataMap.set(groupId, {
+          id:               groupId,
+          name:             metadata.subject,
+          participantCount: metadata.participants?.length || 0,
+          isFetched:        true,
+        });
       }
     }
 
