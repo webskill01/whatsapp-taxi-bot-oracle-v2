@@ -42,9 +42,36 @@ import path from "path";
 // got reposted back into a source group) before appending exactly one. Without
 // this a re-entering message stacks 2..N suffixes — the fingerprint dedup can't
 // catch it because each appended suffix changes the text.
+/**
+ * Strip every known fleet stamp from the end of a message, repeatedly.
+ *
+ * Used at INGEST, before fingerprinting: the stamps rotate, so an unstripped
+ * ride hashes differently per variant and dedup forwards it once per variant.
+ */
+export function stripBranding(text, variants) {
+  if (!text || !Array.isArray(variants) || variants.length === 0) return text || "";
+  let base = text.replace(/\s+$/, "");
+  let peeled = true;
+  while (peeled) {
+    peeled = false;
+    for (const v of variants) {
+      if (v && base.endsWith(v)) {
+        base = base.slice(0, -v.length).replace(/\s+$/, "");
+        peeled = true;
+      }
+    }
+  }
+  return base;
+}
+
 export function applyBranding(text, config) {
-  const variants = config.brandingSuffixes;
-  if (!Array.isArray(variants) || variants.length === 0) return text;
+  const own = Array.isArray(config.brandingSuffixes) ? config.brandingSuffixes : [];
+
+  // Strip the WHOLE fleet's stamps, not just our own: multibot forwards our
+  // output back into groups we watch, so an incoming ride usually already
+  // wears one of its stamps. Stripping only `own` lets those stack.
+  const variants = [...new Set([...own, ...(GLOBAL_CONFIG.knownBrandings || [])])];
+  if (variants.length === 0) return text;
 
   // Peel off any trailing suffix (any variant, repeated) plus its leading blank line.
   let base = text.replace(/\s+$/, "");
@@ -59,7 +86,8 @@ export function applyBranding(text, config) {
     }
   }
 
-  const pick = variants[Math.floor(Math.random() * variants.length)];
+  if (own.length === 0) return base;   // nothing of ours to add -> strip only
+  const pick = own[Math.floor(Math.random() * own.length)];
   return `${base}\n\n${pick}`;
 }
 

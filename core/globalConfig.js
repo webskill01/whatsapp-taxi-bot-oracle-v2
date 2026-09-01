@@ -58,6 +58,43 @@ function loadBlockedData() {
 const BLOCKED_DATA = loadBlockedData();
 
 export const GLOBAL_CONFIG = {
+  /**
+   * Fleet-wide branding registry — EVERY suffix any of our bots appends,
+   * across BOTH repos. Our bots read each other's output, so a stamp missing
+   * from this list is one nobody strips: each hop appends another line, and
+   * because the variants rotate the same ride hashes differently per variant
+   * and slips past fingerprint dedup.
+   *
+   * Keep byte-identical with whatsapp-taxi-bot-multibot/core/globalConfig.js.
+   */
+  knownBrandings: [
+    // oracle-v2 (bot-taxi)
+    "- 🚨 Forwarded Duty 🚨",
+    "- 📢 Forward Duty 📢",
+    "- 🚨 Forwarded ਡਿਊਟੀ 🚨",
+    // bot-delhi
+    "- 🚕 Forwarded Duty 🚕",
+    "- 🚕 Duty Forwarded 🚕",
+    "- 🚕 Forwarded ਡਿਊਟੀ 🚕",
+    "- 🔔 Forwarded Duty 🔔",
+    "- 🔔 Duty Forwarded 🔔",
+    "- 🔔 Forwarded ਡਿਊਟੀ 🔔",
+    // bot-sachin
+    "- 🚗 Forwarded Duty 🚗",
+    "- 🚗 Duty Forwarded 🚗",
+    "- 🚗 Forwarded ਡਿਊਟੀ 🚗",
+    "- ⭐ Forwarded Duty ⭐",
+    "- ⭐ Duty Forwarded ⭐",
+    "- ⭐ Forwarded ਡਿਊਟੀ ⭐",
+    // bot-aayush
+    "- 📍 Forwarded Duty 📍",
+    "- 📍 Duty Forwarded 📍",
+    "- 📍 Forwarded ਡਿਊਟੀ 📍",
+    "- 🚙 Forwarded Duty 🚙",
+    "- 🚙 Duty Forwarded 🚙",
+    "- 🚙 Forwarded ਡਿਊਟੀ 🚙",
+  ],
+
   // ==========================================================================
   // TAXI REQUEST KEYWORDS (normalized to lowercase at definition time)
   // ==========================================================================

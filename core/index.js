@@ -45,7 +45,7 @@ import fs       from "fs";
 import path     from "path";
 
 import { getMessageFingerprint } from "./filter.js";
-import { processMessage, resetCircuitBreaker } from "./router.js";
+import { processMessage, resetCircuitBreaker, stripBranding } from "./router.js";
 import { GLOBAL_CONFIG }         from "./globalConfig.js";
 import { initRuntimeState }      from "./runtimeState.js";
 import { watchConfigGroups }     from "./configLoader.js";
@@ -357,12 +357,19 @@ export async function startBot(config, log, authDir) {
     trackReplayId(msgId);
 
     // ── Extract text ──
-    const text =
+    // Strip any fleet stamp IMMEDIATELY. multibot forwards our output back
+    // into groups we watch, so most rides arrive already stamped. Everything
+    // downstream -- fingerprint, keywords, city extraction -- sees the clean
+    // ride; only the send path re-stamps it. Stripping here (not at send) is
+    // what keeps dedup working across rotated variants.
+    const rawText =
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
       msg.message?.imageMessage?.caption ||
       msg.message?.videoMessage?.caption ||
       "";
+
+    const text = stripBranding(rawText, GLOBAL_CONFIG.knownBrandings);
 
     if (!text || text.trim() === "") {
       stats.rejectedEmptyBody++;
@@ -601,6 +608,17 @@ export async function startBot(config, log, authDir) {
         browser:               ["Taxi Bot", "Chrome", "120.0"],
         markOnlineOnConnect:   false,
         syncFullHistory:       false,
+        // Baileys calls ev.buffer() at connection open and holds EVERY event --
+        // messages.upsert included -- until the initial sync finishes. The default
+        // (() => true) waits for a history-sync notification, then awaits
+        // resyncAppState() before flushing; the 20s escape timer is CLEARED the
+        // moment that notification arrives, so there is no upper bound. On a fresh
+        // pairing this delayed the first delivered message by ~10 minutes.
+        // false => Baileys flushes immediately at connect (chats.js:
+        // "History sync is disabled by config").
+        // Safe here: this bot drops anything older than MAX_MESSAGE_AGE and never
+        // touches app state (no chatModify / privacy / contact store).
+        shouldSyncHistoryMessage: () => false,
         getMessage:            async () => undefined,
         defaultQueryTimeoutMs: 60_000,
         connectTimeoutMs:      60_000,
