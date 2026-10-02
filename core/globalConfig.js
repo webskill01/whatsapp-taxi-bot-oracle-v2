@@ -162,7 +162,7 @@ export const GLOBAL_CONFIG = {
   // ==========================================================================
   rateLimits: {
     hourly: 100,
-    daily: 1500,
+    daily: 2400, // = hourly × 24, so only the hourly cap binds on busy days
   },
 
   // ==========================================================================
