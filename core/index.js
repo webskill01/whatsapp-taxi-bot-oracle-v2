@@ -633,6 +633,12 @@ export async function startBot(config, log, authDir) {
         // Safe here: this bot drops anything older than MAX_MESSAGE_AGE and never
         // touches app state (no chatModify / privacy / contact store).
         shouldSyncHistoryMessage: () => false,
+        // Only groups matter. Copies of the phone's own 1:1 chats fail to decrypt
+        // (Bad MAC), never get acked, and WhatsApp kills the stream over them
+        // ("Stream Errored (ack)") every ~50 min. Ignored jids are acked without
+        // decrypting. Baileys always exempts @s.whatsapp.net (prekeys, server).
+        // Group retry receipts and sender keys arrive from the group jid: kept.
+        shouldIgnoreJid:       (jid) => !!jid && !jid.endsWith("@g.us"),
         getMessage:            async () => undefined,
         defaultQueryTimeoutMs: 60_000,
         connectTimeoutMs:      60_000,
