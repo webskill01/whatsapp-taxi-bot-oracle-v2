@@ -196,6 +196,12 @@ export async function startBot(config, log, authDir) {
   // A4 settling flag
   let needsSettlingDelay = true;
 
+  // Silence watchdog: a reconnect can leave the socket "open" while WhatsApp
+  // delivers nothing (or only undecryptable stubs). 469 groups never go quiet
+  // for 15 min, so treat that as dead and let PM2 start a fresh process.
+  const SILENCE_LIMIT_MS = 15 * 60_000;
+  let lastRealMessageAt  = Date.now();
+
   // C2 debounce
   let fingerprintDirty  = false;
   let saveDebounceTimer = null;
@@ -240,6 +246,14 @@ export async function startBot(config, log, authDir) {
       }
     }
   }, 30_000);
+
+  setInterval(() => {
+    if (!botFullyOperational || isShuttingDown) return;
+    const silentMs = Date.now() - lastRealMessageAt;
+    if (silentMs < SILENCE_LIMIT_MS) return;
+    log.error(`🐕 WATCHDOG: no readable message for ${Math.round(silentMs / 60_000)} min — restarting`);
+    gracefulShutdown("watchdog");
+  }, 60_000);
 
   // ===========================================================================
   // C2: FINGERPRINT PERSISTENCE
@@ -744,6 +758,7 @@ export async function startBot(config, log, authDir) {
       // messages.upsert
       sock.ev.on("messages.upsert", async ({ messages, type }) => {
         if (type !== "notify") return;
+        if (messages.some((m) => m.message)) lastRealMessageAt = Date.now();
         for (const msg of messages) {
           try {
             await handleMessage(msg);
