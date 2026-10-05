@@ -187,6 +187,7 @@ export async function startBot(config, log, authDir) {
     pathBRouted:                0,
     cryptoErrors:               0,
     racePrevented:              0,
+    unavailablePlaceholders:    0,
   };
 
   // B1 reconnect state
@@ -254,6 +255,10 @@ export async function startBot(config, log, authDir) {
     log.error(`🐕 WATCHDOG: no readable message for ${Math.round(silentMs / 60_000)} min — restarting`);
     gracefulShutdown("watchdog");
   }, 60_000);
+
+  setInterval(() => {
+    log.info(`🔎 Unavailable (lost) group msgs: ${stats.unavailablePlaceholders} | processed: ${stats.totalProcessed}`);
+  }, 10 * 60_000);
 
   // ===========================================================================
   // C2: FINGERPRINT PERSISTENCE
@@ -763,6 +768,15 @@ export async function startBot(config, log, authDir) {
 
       // messages.upsert
       sock.ev.on("messages.upsert", async ({ messages, type }) => {
+        // Diagnostic: group messages WhatsApp delivered empty ("unavailable"). Baileys
+        // asks the phone to resend them, but shouldIgnoreJid drops the phone's reply,
+        // so each one counted here is a message the bot never gets to see.
+        for (const m of messages) {
+          if (!m.message && m.key.remoteJid?.endsWith("@g.us") &&
+              m.messageStubParameters?.[0] === "Message absent from node") {
+            stats.unavailablePlaceholders++;
+          }
+        }
         if (type !== "notify") return;
         if (messages.some((m) => m.message)) lastRealMessageAt = Date.now();
         for (const msg of messages) {
