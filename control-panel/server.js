@@ -311,13 +311,17 @@ app.get("/api/bot/:id/stats", requireAuth, scopeToBot, (req, res) =>
 const PERIOD_MS = { day: 86400000, week: 604800000, month: 2592000000, all: 0 };
 function aggregateRides(dir, period) {
   const file = join(dir, "rides.jsonl");
-  const out = { period, total: 0, byCity: {} };
+  const until = Date.now();
+  const since = PERIOD_MS[period] ? until - PERIOD_MS[period] : 0;
+  // Rolling window ending now; the panel shows from/to so "day" isn't read as midnight-to-midnight.
+  // For "all", from = oldest ride on file.
+  const out = { period, total: 0, byCity: {}, from: since || null, until };
   if (!existsSync(file)) return out;
-  const since = PERIOD_MS[period] ? Date.now() - PERIOD_MS[period] : 0;
   for (const line of readFileSync(file, "utf8").split("\n")) {
     if (!line) continue;
     let r; try { r = JSON.parse(line); } catch { continue; }
     if (r.t < since) continue;
+    if (out.from === null || r.t < out.from) out.from = r.t;
     out.total++;
     out.byCity[r.city] = (out.byCity[r.city] || 0) + 1;
   }

@@ -267,9 +267,16 @@ async function renderAnalytics(){
   const r = await api(`/api/bot/${anaId}/analytics?period=${anaPeriod}`);
   const data = document.getElementById("anaData");
   if (r.error){ data.innerHTML = `<div class="off">${esc(r.error)}</div>`; return; }
+  // Periods are rolling windows ending now, not calendar days — say so explicitly.
+  const fmt = t => new Date(t).toLocaleString("en-IN", { timeZone: "Asia/Kolkata",
+    day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  const span = { day: "rolling last 24 hours", week: "rolling last 7 days",
+                 month: "rolling last 30 days", all: "since the first ride on record" }[anaPeriod];
+  const range = `<div class="muted" style="margin-bottom:8px">🕒 Counting rides from <b>${r.from ? fmt(r.from) : "—"}</b>
+    → <b>${fmt(r.until)}</b> IST <span>(${span})</span></div>`;
   const cities = Object.entries(r.byCity).sort((a,b)=>b[1]-a[1]);
-  if (!cities.length){ data.innerHTML = `<div class="muted">No rides in this period.</div>`; return; }
-  data.innerHTML = `<div style="font-weight:600;margin-bottom:6px">Total: ${r.total} rides</div>`
+  if (!cities.length){ data.innerHTML = range + `<div class="muted">No rides in this period.</div>`; return; }
+  data.innerHTML = range + `<div style="font-weight:600;margin-bottom:6px">Total: ${r.total} rides</div>`
     + cities.map(([c,n]) =>
         `<div class="grp"><div class="gname">${esc(c)}</div><div class="gname">${n}</div></div>`).join("");
 }
