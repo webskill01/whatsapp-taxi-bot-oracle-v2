@@ -93,10 +93,18 @@ export function applyBranding(text, config) {
 
 // Append-only ride log: one JSON line per forwarded ride → rides.jsonl in the bot dir.
 // Read + aggregated on demand by the control panel. Fire-and-forget; never throws.
-function logRide(config, city) {
+function logRide(config, city, text) {
   if (!config.botDir) return;
-  const line = JSON.stringify({ t: Date.now(), city: city || "unknown" }) + "\n";
+  const t = Date.now();
+  const line = JSON.stringify({ t, city: city || "unknown" }) + "\n";
   fs.appendFile(path.join(config.botDir, "rides.jsonl"), line, () => {});
+  // No city → keep the text so scripts/unknown-cities.js can surface missing aliases.
+  // Phones masked: the report only needs place names.
+  if (!city && text) {
+    const masked = text.replace(/\+?\d[\d\s-]{6,}\d/g, "[phone]").slice(0, 500);
+    fs.appendFile(path.join(config.botDir, "unknown-cities.jsonl"),
+      JSON.stringify({ t, text: masked }) + "\n", () => {});
+  }
 }
 
 // =============================================================================
@@ -424,7 +432,7 @@ async function processPathA(sock, text, sourceGroup, config, stats, log, sentGro
     sock, shuffled, applyBranding(text, config), `PathA-${detectedCity || "noCity"}`, stats, log, sentGroups
   );
 
-  if (successCount > 0) logRide(config, extractPickupCity(text, ALL_CITIES));
+  if (successCount > 0) logRide(config, extractPickupCity(text, ALL_CITIES), text);
   log.info(`✅ PATH A DONE: ${successCount}/${shuffled.length} | City: ${detectedCity || "none"} | ${rateLimitTimestamps.hourly.length}/${GLOBAL_CONFIG.rateLimits.hourly}h`);
   return { wasRouted: successCount > 0 };
 }
@@ -503,7 +511,7 @@ async function processPathB(sock, text, config, stats, log, sentGroups) {
     sock, shuffled, applyBranding(text, config), `PathB-${detectedCity || "noCity"}`, stats, log, sentGroups
   );
 
-  if (successCount > 0) logRide(config, extractPickupCity(text, ALL_CITIES));
+  if (successCount > 0) logRide(config, extractPickupCity(text, ALL_CITIES), text);
   log.info(`✅ PATH B DONE: ${successCount}/${shuffled.length} | City: ${detectedCity || "none"} | ${rateLimitTimestamps.hourly.length}/${GLOBAL_CONFIG.rateLimits.hourly}h`);
   return { wasRouted: successCount > 0 };
 }
