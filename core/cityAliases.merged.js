@@ -802,6 +802,30 @@ export const CITY_ALIASES = {
   rampur: "Rampur Bushahr",
   "rampur bushahr": "Rampur Bushahr",
   rampure: "Rampur Bushahr",       // Intentional typo
+
+  // ============================================================================
+  // FROM scripts/unknown-cities.js REPORT (2026-10-07)
+  // Ride-stats only: none of these map to the 11 routed cities, so routing is
+  // unchanged. Hill-town misspellings join their existing hub.
+  // ============================================================================
+  kasol: "Manali", kashol: "Manali", bhuntar: "Manali", jibhi: "Manali",
+  gagal: "Dharamshala", "bir billing": "Dharamshala", maclodganj: "Dharamshala",
+  mansoori: "Dehradun", banikhet: "Dalhousie",
+  ropar: "Ropar", rupnagar: "Ropar",
+  nawanshahr: "Nawanshahr", nawashehr: "Nawanshahr", nawashahr: "Nawanshahr",
+  gurdaspur: "Gurdaspur", batala: "Batala", kapurthala: "Kapurthala",
+  ferozepur: "Ferozepur", firozpur: "Ferozepur", fazilka: "Fazilka",
+  hoshiarpur: "Hoshiarpur", moga: "Moga", sangrur: "Sangrur", barnala: "Barnala",
+  muktsar: "Muktsar", "chamkaur sahib": "Chamkaur Sahib",
+  kalka: "Kalka", pinjore: "Kalka", nalagarh: "Nalagarh", baddi: "Nalagarh",
+  kaithal: "Kaithal", sirsa: "Sirsa", yamunanagar: "Yamunanagar",
+  kurukshetra: "Kurukshetra", sonipat: "Sonipat", jind: "Jind",
+  jammu: "Jammu", katra: "Katra", srinagar: "Srinagar",
+  meerut: "Meerut", sambhal: "Sambhal",
+  indore: "Indore", ujjain: "Ujjain", omkareshwar: "Omkareshwar",
+  patna: "Patna", darbhanga: "Darbhanga",
+  mumbai: "Mumbai", thane: "Mumbai", pune: "Pune",
+  ahmedabad: "Ahmedabad", ahemdabad: "Ahmedabad", rajkot: "Rajkot",
 };
 
 /**

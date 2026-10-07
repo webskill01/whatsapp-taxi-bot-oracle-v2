@@ -3,17 +3,18 @@
  * aliases (misspellings, unlisted towns) can be added to core/cityAliases.merged.js.
  *
  *   node scripts/unknown-cities.js [--bot bot-taxi] [--days 3] [--top 40]
+ *   node scripts/unknown-cities.js --backfill   # after adding aliases: fix old "unknown" rides
  *
  * Reads bots/<bot>/unknown-cities.jsonl (written by router.js logRide). Only words
  * next to a route word (to / from / drop / pickup …) count, once per message.
  * "nearest" is the closest existing alias by edit distance — a likely misspelling.
  * Nothing is changed: a human (or Claude) reviews the list and edits the alias file.
  */
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join, resolve } from "path";
 import { CITY_ALIASES } from "../core/cityAliases.merged.js";
-import { normalizeText } from "../core/filter.js";
+import { normalizeText, extractPickupCity, ALL_CITIES } from "../core/filter.js";
 import { GLOBAL_CONFIG } from "../core/globalConfig.js";
 
 const ROUTE = new Set(["to", "from", "drop", "pickup", "pick", "up", "se", "current", "location", "point", "via"]);
@@ -72,6 +73,29 @@ export function nearest(word) {
   return `${best.alias} → ${city[0].toUpperCase()}${city.slice(1)}`;
 }
 
+/**
+ * Re-resolve "unknown" lines in rides.jsonl using the saved texts (matched on t),
+ * after new aliases were added. Returns [newRidesContent, fixedCount].
+ */
+export function backfill(ridesContent, unknownContent) {
+  const cityAt = new Map();
+  for (const line of unknownContent.split("\n")) {
+    let r; try { r = JSON.parse(line); } catch { continue; }
+    const city = extractPickupCity(r.text, ALL_CITIES);
+    if (city) cityAt.set(r.t, city);
+  }
+  let fixed = 0;
+  const out = ridesContent.split("\n").map((line) => {
+    if (!line.includes('"unknown"')) return line;
+    let r; try { r = JSON.parse(line); } catch { return line; }
+    const city = cityAt.get(r.t);
+    if (!city) return line;
+    fixed++;
+    return JSON.stringify({ ...r, city });
+  });
+  return [out.join("\n"), fixed];
+}
+
 function main() {
   const arg = (name, def) => {
     const i = process.argv.indexOf(`--${name}`);
@@ -84,6 +108,18 @@ function main() {
   const file = join(root, "bots", bot, "unknown-cities.jsonl");
   if (!existsSync(file)) {
     console.log(`No ${file} yet — it fills as the bot forwards rides without a city.`);
+    return;
+  }
+
+  if (process.argv.includes("--backfill")) {
+    const ridesFile = join(root, "bots", bot, "rides.jsonl");
+    const before = readFileSync(ridesFile, "utf8");
+    const [after, fixed] = backfill(before, readFileSync(file, "utf8"));
+    // ponytail: the bot appends while we work; keep any lines it added since the read
+    const tail = readFileSync(ridesFile, "utf8").slice(before.length);
+    writeFileSync(ridesFile + ".tmp", after + tail);
+    renameSync(ridesFile + ".tmp", ridesFile);
+    console.log(`Backfilled ${fixed} "unknown" rides in ${ridesFile}`);
     return;
   }
 
