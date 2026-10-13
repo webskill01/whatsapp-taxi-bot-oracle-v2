@@ -826,6 +826,21 @@ export const CITY_ALIASES = {
   patna: "Patna", darbhanga: "Darbhanga",
   mumbai: "Mumbai", thane: "Mumbai", pune: "Pune",
   ahmedabad: "Ahmedabad", ahemdabad: "Ahmedabad", rajkot: "Rajkot",
+
+  // FROM scripts/unknown-cities.js REPORT (2026-10-13), same rule: stats only.
+  bhunter: "Manali", birbilling: "Dharamshala", meclodganj: "Dharamshala",
+  "nagrota bagwan": "Dharamshala", narkanda: "Shimla", rewalsar: "Mandi", gagret: "Una",
+  roorkee: "Haridwar", roorke: "Haridwar", vrindavan: "Agra", pehowa: "Kurukshetra",
+  narwana: "Jind", samalkha: "Panipat", smalkha: "Panipat", nangal: "Ropar",
+  "anandpur sahib": "Anandpur Sahib", "anadhpur sahib": "Anandpur Sahib",
+  gobindgarh: "Mandi Gobindgarh", "mandi gobindgarh": "Mandi Gobindgarh",
+  "tarn taran": "Tarn Taran", "taran taran": "Tarn Taran",
+  tohana: "Tohana", palwal: "Palwal", "charkhi dadri": "Charkhi Dadri", "charkhi dadari": "Charkhi Dadri",
+  bikaner: "Bikaner", hanumangarh: "Hanumangarh", hanumanghar: "Hanumangarh",
+  ganganagar: "Sri Ganganagar", sikar: "Sikar", ladnun: "Ladnun", ladnu: "Ladnun",
+  sardarshahar: "Sardarshahar", ranthambore: "Ranthambore", kathua: "Kathua",
+  lucknow: "Lucknow", ayodhya: "Ayodhya", gorakhpur: "Gorakhpur", jogbani: "Jogbani",
+  bhopal: "Bhopal", bhavnagar: "Bhavnagar",
 };
 
 /**
