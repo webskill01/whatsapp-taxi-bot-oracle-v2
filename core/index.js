@@ -595,7 +595,7 @@ export async function startBot(config, log, authDir) {
 
       // Suppress crypto noise (normal for large groups)
       const baileysLogger = pino({
-        level: "warn",
+        level: process.env.BAILEYS_LOG_LEVEL || "warn", // debug/trace to diagnose stalls
         hooks: {
           logMethod(inputArgs, method) {
             const msg = inputArgs[0];
@@ -668,6 +668,31 @@ export async function startBot(config, log, authDir) {
       };
       sock.ev.on("groups.upsert", harvestNames);
       sock.ev.on("groups.update", harvestNames);
+
+      // Baileys requests ONE offline batch (100) on offline_preview and never
+      // asks again. After real downtime (panel stop, hours offline) the backlog
+      // is bigger, so WhatsApp waits for the next request, the "offline done"
+      // node never comes, and Baileys buffers every live message forever.
+      // Keep requesting batches until WhatsApp says the backlog is drained.
+      const thisSock = sock;
+      let offlineDrained = false;
+      thisSock.ws.on("CB:ib,,offline", (node) => {
+        offlineDrained = true;
+        const count = node?.content?.[0]?.attrs?.count;
+        log.info(`📬 Offline backlog drained (${count ?? "?"} items)`);
+      });
+      thisSock.ws.on("CB:ib,,offline_preview", () => {
+        let batches = 1;
+        const timer = setInterval(() => {
+          if (offlineDrained || sock !== thisSock || !thisSock.ws.isOpen) return clearInterval(timer);
+          batches++;
+          if (batches % 10 === 0) log.info(`📬 Still draining offline backlog (batch ${batches})`);
+          thisSock.sendNode({
+            tag: "ib", attrs: {},
+            content: [{ tag: "offline_batch", attrs: { count: "100" } }],
+          }).catch(() => {});
+        }, 3000);
+      });
 
       sock.ev.on("creds.update", async () => {
         if (saveCreds) await saveCreds();
