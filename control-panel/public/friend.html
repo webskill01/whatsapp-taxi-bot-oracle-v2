@@ -117,14 +117,20 @@ async function load(){
   pb.textContent = paused ? "▶ Sharing paused — manage…" : dis ? `⏸ Sharing (${dis} off)…` : "⏸ Pause sharing…";
   pb.className = (paused||dis) ? "go" : "";
   const sb = document.getElementById("stopBtn");
-  sb.textContent = online ? "⏹ Stop" : "▶ Start";
-  sb.className = online ? "danger" : "go";
+  sb.textContent = online && !paused ? "⏹ Stop" : "▶ Start";
+  sb.className = online && !paused ? "danger" : "go";
   loadCounts();
 }
 function toggleStop(){
   const online = BOT?.pm2?.status === "online";
-  if (online) doAct('stop','Stop your bot? It goes offline until you Start it again.');
-  else doAct('restart','Start your bot now?');
+  // Stop = pause sharing; the bot stays connected so no missed-message backlog builds.
+  if (!online) doAct('restart','Start your bot now?');
+  else if (!paused) { if (confirm('Stop sharing? Your bot stays connected and Start resumes instantly.')) setSharing(true); }
+  else setSharing(false);
+}
+async function setSharing(p){
+  const r = await post(`/api/bot/${BOT.id}/pause`, { paused: p });
+  toast(r.error || (p ? 'Sharing stopped (bot still connected)' : 'Sharing started')); load();
 }
 async function loadCounts(){
   const r = await api("/api/block/list");

@@ -189,12 +189,22 @@ function botRow(b){
       <button onclick="showGroups('${b.id}')">👥 Groups</button>
       <button onclick="showQR('${b.id}')">📱 QR</button>
       <button class="go" onclick="act('${b.id}','restart','${online?'Restart':'Start'} ${b.id}?')">${online?'↻ Restart':'▶ Start'}</button>
-      ${online?`<button class="danger" onclick="act('${b.id}','stop','Stop ${b.id}? It goes offline until you Start/Restart it.')">⏹ Stop</button>`:''}
+      ${online && !paused?`<button class="danger" onclick="setSharing('${b.id}',true,'Stop sharing on ${b.id}? It stays connected (no missed-message backlog) and Start resumes instantly.')">⏹ Stop</button>`:''}
+      ${online && paused?`<button class="go" onclick="setSharing('${b.id}',false,'Start sharing on ${b.id}?')">▶ Start sharing</button>`:''}
+      ${online?`<button class="danger" onclick="act('${b.id}','stop','POWER OFF ${b.id}? It disconnects from WhatsApp; messages pile up and it must catch up when started again. Use ⏹ Stop to just stop sharing.')">⏻ Power off</button>`:''}
       <button class="danger" onclick="act('${b.id}','reset','RESET AUTH for ${b.id}? It logs the bot out and needs a new QR scan.')">⚠ Reset</button>
     </div>
   </div>`;
 }
 
+// Stop/Start = pause/resume sharing; the bot stays connected so WhatsApp never
+// builds a backlog. Real disconnect lives behind "Power off".
+async function setSharing(id, paused, confirmMsg){
+  if (!confirm(confirmMsg)) return;
+  const r = await post(`/api/bot/${id}/pause`, { paused });
+  toast(r.error || (paused ? 'Sharing stopped (bot still connected)' : 'Sharing started'));
+  loadBots();
+}
 async function act(id, action, confirmMsg){
   if (!confirm(confirmMsg)) return;
   const r = await post(`/api/bot/${id}/${action}`, {});
