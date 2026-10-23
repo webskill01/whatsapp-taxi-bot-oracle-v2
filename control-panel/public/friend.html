@@ -124,7 +124,7 @@ async function load(){
 function toggleStop(){
   const online = BOT?.pm2?.status === "online";
   // Stop = pause sharing; the bot stays connected so no missed-message backlog builds.
-  if (!online) doAct('restart','Start your bot now?');
+  if (!online) { if (confirm('Start your bot now?')) post(`/api/bot/${BOT.id}/pause`, { paused: false }).then(() => doAct('restart', null)); }
   else if (!paused) { if (confirm('Stop sharing? Your bot stays connected and Start resumes instantly.')) setSharing(true); }
   else setSharing(false);
 }
@@ -138,7 +138,7 @@ async function loadCounts(){
     `🚫 ${r.counts.blockedPhoneNumbers} spam numbers blocked · ${r.counts.ignoreIfContains} ignore phrases`;
 }
 async function doAct(action, msg){
-  if (!confirm(msg)) return;
+  if (msg && !confirm(msg)) return;
   const r = await post(`/api/bot/${BOT.id}/${action}`, {});
   toast(r.message || r.error || "done");
   if (action==='reset') setTimeout(showQR, 4000);

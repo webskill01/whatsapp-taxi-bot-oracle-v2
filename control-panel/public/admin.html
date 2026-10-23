@@ -188,7 +188,7 @@ function botRow(b){
       <button onclick="showAnalytics('${b.id}')">📈 Rides</button>
       <button onclick="showGroups('${b.id}')">👥 Groups</button>
       <button onclick="showQR('${b.id}')">📱 QR</button>
-      <button class="go" onclick="act('${b.id}','restart','${online?'Restart':'Start'} ${b.id}?')">${online?'↻ Restart':'▶ Start'}</button>
+      <button class="go" onclick="${online?`act('${b.id}','restart','Restart ${b.id}?')`:`startBot('${b.id}')`}">${online?'↻ Restart':'▶ Start'}</button>
       ${online && !paused?`<button class="danger" onclick="setSharing('${b.id}',true,'Stop sharing on ${b.id}? It stays connected (no missed-message backlog) and Start resumes instantly.')">⏹ Stop</button>`:''}
       ${online && paused?`<button class="go" onclick="setSharing('${b.id}',false,'Start sharing on ${b.id}?')">▶ Start sharing</button>`:''}
       ${online?`<button class="danger" onclick="act('${b.id}','stop','POWER OFF ${b.id}? It disconnects from WhatsApp; messages pile up and it must catch up when started again. Use ⏹ Stop to just stop sharing.')">⏻ Power off</button>`:''}
@@ -204,6 +204,14 @@ async function setSharing(id, paused, confirmMsg){
   const r = await post(`/api/bot/${id}/pause`, { paused });
   toast(r.error || (paused ? 'Sharing stopped (bot still connected)' : 'Sharing started'));
   loadBots();
+}
+// Start always means "sharing on": clear any pause, then boot the process.
+async function startBot(id){
+  if (!confirm(`Start ${id}?`)) return;
+  await post(`/api/bot/${id}/pause`, { paused: false });
+  const r = await post(`/api/bot/${id}/restart`, {});
+  toast(r.message || r.error || "done");
+  setTimeout(loadBots, 1500);
 }
 async function act(id, action, confirmMsg){
   if (!confirm(confirmMsg)) return;
