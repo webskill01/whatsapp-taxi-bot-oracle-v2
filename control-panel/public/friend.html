@@ -112,7 +112,7 @@ async function load(){
   document.getElementById("botName").innerHTML = `🤖 ${esc(BOT.id)}`;
   const online = BOT.pm2.status === "online";
   document.getElementById("statusLine").innerHTML =
-    `<span class="dot ${online?'on':'off'}"></span> <span class="badge ${online?'on':'off'}">${esc(BOT.pm2.status)}</span> ${paused?'<span class="badge warnb">paused</span>':''} ${dis?`<span class="badge warnb">${dis} group off</span>`:''}`;
+    `<span class="dot ${online?'on':'off'}"></span> <span class="badge ${online?'on':'off'}">${esc(BOT.pm2.status)}</span> ${paused?'<span class="badge warnb">paused</span>':''} ${BOT.catchingUp?`<span class="badge warnb">catching up on missed messages… (${BOT.catchingUp.batches*100}+)</span>`:''} ${dis?`<span class="badge warnb">${dis} group off</span>`:''}`;
   const pb = document.getElementById("pauseBtn");
   pb.textContent = paused ? "▶ Sharing paused — manage…" : dis ? `⏸ Sharing (${dis} off)…` : "⏸ Pause sharing…";
   pb.className = (paused||dis) ? "go" : "";

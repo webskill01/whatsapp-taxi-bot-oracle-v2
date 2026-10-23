@@ -193,6 +193,7 @@ export async function startBot(config, log, authDir) {
   // B1 reconnect state
   let lastReconnectTime   = 0;
   let botFullyOperational = false;
+  let catchingUp = null; // { batches } while the offline backlog drains (shown in panel)
 
   // A4 settling flag
   let needsSettlingDelay = true;
@@ -521,6 +522,7 @@ export async function startBot(config, log, authDir) {
   function destroySocket(reason) {
     if (!sock) return;
     log.info(`🔌 Destroying socket: ${reason}`);
+    catchingUp = null;
     try {
       sock.ev.removeAllListeners("connection.update");
       sock.ev.removeAllListeners("creds.update");
@@ -678,20 +680,21 @@ export async function startBot(config, log, authDir) {
       let offlineDrained = false;
       thisSock.ws.on("CB:ib,,offline", (node) => {
         offlineDrained = true;
+        catchingUp = null;
         const count = node?.content?.[0]?.attrs?.count;
         log.info(`📬 Offline backlog drained (${count ?? "?"} items)`);
       });
       thisSock.ws.on("CB:ib,,offline_preview", () => {
-        let batches = 1;
+        catchingUp = { batches: 1 };
         const timer = setInterval(() => {
           if (offlineDrained || sock !== thisSock || !thisSock.ws.isOpen) return clearInterval(timer);
-          batches++;
-          if (batches % 10 === 0) log.info(`📬 Still draining offline backlog (batch ${batches})`);
+          const batches = ++catchingUp.batches;
+          if (batches % 30 === 0) log.info(`📬 Still draining offline backlog (batch ${batches})`);
           thisSock.sendNode({
             tag: "ib", attrs: {},
             content: [{ tag: "offline_batch", attrs: { count: "100" } }],
           }).catch(() => {});
-        }, 3000);
+        }, 1000);
       });
 
       sock.ev.on("creds.update", async () => {
@@ -874,6 +877,7 @@ export async function startBot(config, log, authDir) {
         },
         uptime:      ((Date.now() - BOT_START_TIME) / 60_000).toFixed(1) + " minutes",
         operational: botFullyOperational,
+        catchingUp,
         qrAvailable: !!latestQR,
         stats,
         cache: {

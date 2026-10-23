@@ -177,6 +177,7 @@ function botRow(b){
       <div class="name"><span class="dot ${online?'on':'off'}"></span>${esc(b.id)}
         <span class="badge ${online?'on':'off'}">${esc(st)}</span>
         ${paused?'<span class="badge warnb">paused</span>':''}
+        ${b.catchingUp?`<span class="badge warnb">catching up on missed messages… (${b.catchingUp.batches*100}+)</span>`:''}
         ${dis?`<span class="badge warnb">${dis} group off</span>`:''}
       </div>
       <div class="sub">port ${b.statsPort} · ${b.pm2.restarts ?? '–'} restarts</div>

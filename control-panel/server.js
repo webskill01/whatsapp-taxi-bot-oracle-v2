@@ -187,13 +187,19 @@ app.get("/api/bots", requireAuth, async (req, res) => {
   const visible = req.auth.role === "admin"
     ? BOTS
     : BOTS.filter((b) => b.id === req.auth.botId);
+  // After a long stop the bot spends a few minutes pulling the offline backlog
+  // before it forwards anything; surface that so "online but silent" is explained.
+  const catchingUp = await Promise.all(visible.map((b) =>
+    fetch(`http://127.0.0.1:${b.statsPort}/stats`, { signal: AbortSignal.timeout(1500) })
+      .then((r) => r.json()).then((j) => j.catchingUp || null).catch(() => null)));
   res.json({
     role: req.auth.role,
-    bots: visible.map((b) => ({
+    bots: visible.map((b, i) => ({
       id: b.id,
       statsPort: b.statsPort,
       pm2: status[b.id] || { status: "unknown" },
       runtime: readRuntime(b.dir),
+      catchingUp: catchingUp[i],
     })),
   });
 });
