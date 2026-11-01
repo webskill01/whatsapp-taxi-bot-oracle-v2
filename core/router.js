@@ -264,14 +264,19 @@ async function sendToMultipleGroupsSequential(sock, targets, text, label, stats,
     log.info(`[${label}] Skipped ${targets.length - dedupedTargets.length} target(s) already sent by another pipeline`);
   }
 
-  const now          = Date.now();
-  const readyTargets = dedupedTargets.filter((id) => {
-    const lastSend = inFlightSends.get(id);
-    return !lastSend || now - lastSend >= GLOBAL_CONFIG.deduplication.sendCooldown;
-  });
+  // Wait out the per-group cooldown instead of dropping the ride: with a single
+  // target (bot paused + one always-on group) a drop meant the ride was lost.
+  const cooldown = GLOBAL_CONFIG.deduplication.sendCooldown;
+  const wait = Math.max(0, ...dedupedTargets.map((id) =>
+    cooldown - (Date.now() - (inFlightSends.get(id) || 0))));
+  if (wait > 0) {
+    log.info(`⏳ [${label}] Waiting ${wait}ms for group cooldown`);
+    await new Promise((r) => setTimeout(r, wait));
+  }
+  const readyTargets = dedupedTargets;
 
   if (readyTargets.length === 0) {
-    log.warn(`⏭️  [${label}] All targets in cooldown`);
+    log.warn(`⏭️  [${label}] No targets left after dedup`);
     return { successCount: 0, totalTargets: 0 };
   }
 
