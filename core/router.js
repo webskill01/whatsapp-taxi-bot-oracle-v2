@@ -502,7 +502,7 @@ async function processPathB(sock, text, config, stats, log, sentGroups) {
   const detectedCity = extractPickupCity(text, config.configuredCities);
   const cityGroupId  = detectedCity ? config.cityTargetGroups[detectedCity] : null;
 
-  if (!cityGroupId) {
+  if (!cityGroupId && !config.runtime?.alwaysOn?.size) {
     log.warn(`🏙️  PATH B — No city detected, message dropped | ${text.substring(0, 40)}...`);
     stats.rejectedNoCity = (stats.rejectedNoCity || 0) + 1;
     return { wasRouted: false };
@@ -511,7 +511,8 @@ async function processPathB(sock, text, config, stats, log, sentGroups) {
   log.info(`🔀 PATH B ROUTING | City: ${detectedCity}`);
 
   // Build targets: city only — free is source, do NOT echo back, paid excluded for Path B
-  const targets  = [cityGroupId];
+  // ...except 📌 always-on groups (e.g. Easecab x Punjab Taxi), which get free-group rides too.
+  const targets  = [...(cityGroupId ? [cityGroupId] : []), ...(config.runtime?.alwaysOn || [])];
   const activeTargets = filterDisabledTargets(
     [...new Set(targets)], config.runtime, log, `PathB-${detectedCity || "noCity"}`
   );
