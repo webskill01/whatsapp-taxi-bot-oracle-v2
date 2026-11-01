@@ -30,13 +30,15 @@ export function initRuntimeState(botDir, log) {
   const filePath = join(botDir, "runtime.json");
 
   // Live state object. `disabledTargets` is a Set for O(1) lookups in the send loop.
-  const state = { paused: false, disabledTargets: new Set() };
+  const state = { paused: false, disabledTargets: new Set(), alwaysOn: new Set() };
 
   function apply(data) {
     state.paused = data.paused === true;
     state.disabledTargets = new Set(
       Array.isArray(data.disabledTargets) ? data.disabledTargets : []
     );
+    // Targets that keep receiving rides even while the whole bot is paused.
+    state.alwaysOn = new Set(Array.isArray(data.alwaysOn) ? data.alwaysOn : []);
   }
 
   // Initial load — create the file with defaults if it doesn't exist yet.

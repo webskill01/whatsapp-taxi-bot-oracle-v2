@@ -171,7 +171,8 @@ async function loadBots(){
 function botRow(b){
   const st = b.pm2.status, online = st==="online", paused = b.runtime?.paused;
   const dis = (b.runtime?.disabledTargets||[]).length;
-  const sharingLabel = paused ? '⏸ Sharing (all off)' : dis ? `⏸ Sharing (${dis} off)` : '⏸ Sharing';
+  const pins = (b.runtime?.alwaysOn||[]).length;
+  const sharingLabel = paused ? (pins ? `⏸ Sharing (only ${pins} 📌 on)` : '⏸ Sharing (all off)') : dis ? `⏸ Sharing (${dis} off)` : '⏸ Sharing';
   return `<div class="bot">
     <div class="binfo">
       <div class="name"><span class="dot ${online?'on':'off'}"></span>${esc(b.id)}
@@ -227,10 +228,11 @@ async function openPauseMenu(id){
   document.getElementById("pauseTitle").textContent = id + " · Sharing";
   const body = document.getElementById("pauseBody");
   const paused = bot?.runtime?.paused;
+  const pinned = new Set(bot?.runtime?.alwaysOn || []);
   body.innerHTML = `
     <div class="grp ${paused?'disabled':''}">
       <div class="gmeta"><div class="gname">Entire bot</div>
-        <div class="muted">${paused?'Paused — forwarding nothing':'Forwarding active'}</div></div>
+        <div class="muted">${paused?(pinned.size?`Paused — only ${pinned.size} 📌 group(s) still sharing`:'Paused — forwarding nothing'):'Forwarding active'}</div></div>
       <button class="sm ${paused?'go':'danger'}" onclick="menuPause('${id}',${!paused})">${paused?'▶ Resume all':'⏸ Pause all'}</button>
     </div>
     <hr class="divider"/>
@@ -246,10 +248,11 @@ async function openPauseMenu(id){
   const targets = r.groups.filter(g=>g.type==='target');
   if (!targets.length){ box.innerHTML = `<div class="muted">No target groups configured.</div>`; return; }
   box.innerHTML = targets.map(g=>{
-    const off = disabled.has(g.id);
+    const off = disabled.has(g.id), pin = pinned.has(g.id);
     return `<div class="grp ${off?'disabled':''}">
-      <div class="gmeta"><div class="gname">${esc(g.name)} ${off?'<span class="badge warnb">off</span>':''}</div>
+      <div class="gmeta"><div class="gname">${esc(g.name)} ${off?'<span class="badge warnb">off</span>':''} ${pin?'<span class="badge">📌 always on</span>':''}</div>
         <div class="gid">${esc(g.id)}</div></div>
+      <button class="sm ${pin?'go':''}" title="Keep sharing to this group even when the entire bot is paused" onclick="menuAlwaysOn('${id}','${g.id}',${!pin})">${pin?'📌 Unpin':'📌 Keep on'}</button>
       <button class="sm ${off?'go':'danger'}" onclick="menuTarget('${id}','${g.id}',${!off})">${off?'▶ Resume':'⏸ Pause'}</button>
     </div>`;
   }).join("");
@@ -257,6 +260,12 @@ async function openPauseMenu(id){
 async function menuPause(id, paused){
   const r = await post(`/api/bot/${id}/pause`, { paused });
   toast(r.error || (paused?'Paused entire bot':'Resumed'));
+  await loadBots(); openPauseMenu(id);
+}
+async function menuAlwaysOn(id, groupId, on){
+  const r = await post(`/api/bot/${id}/always-on`, { groupId, on });
+  if (r.error){ toast(r.error); return; }
+  toast(on?'Pinned — keeps sharing when bot is paused':'Unpinned');
   await loadBots(); openPauseMenu(id);
 }
 async function menuTarget(id, groupId, disabled){

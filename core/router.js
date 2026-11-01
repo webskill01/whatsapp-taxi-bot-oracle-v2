@@ -222,7 +222,12 @@ function shuffleArray(arr) {
  * group" toggle from the control panel). Returns the original array untouched
  * when nothing is disabled.
  */
-function filterDisabledTargets(targets, runtime, log, label) {
+export function filterDisabledTargets(targets, runtime, log, label) {
+  // Whole bot paused → only the pinned "always on" targets still get rides.
+  if (runtime?.paused) {
+    targets = targets.filter((g) => runtime.alwaysOn?.has(g));
+    log.info(`📌 [${label}] Bot paused — sharing only to ${targets.length} always-on target(s)`);
+  }
   const disabled = runtime?.disabledTargets;
   if (!disabled || disabled.size === 0) return targets;
 
@@ -534,7 +539,8 @@ export async function processMessage(sock, text, sourceGroup, isPathA, config, s
     // Bot stays connected but forwards nothing while paused. Checked first so a
     // paused bot does zero routing work. Returns wasRouted:false so the caller
     // unlocks the fingerprint (the message can still forward once un-paused).
-    if (config.runtime?.paused) {
+    // With always-on targets pinned, a paused bot still routes (to those only).
+    if (config.runtime?.paused && !config.runtime.alwaysOn?.size) {
       stats.rejectedPaused = (stats.rejectedPaused || 0) + 1;
       log.info(`⏸️  Forwarding paused — message not routed`);
       return { wasRouted: false, path: "none" };

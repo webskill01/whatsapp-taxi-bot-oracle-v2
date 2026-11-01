@@ -293,6 +293,23 @@ app.post("/api/bot/:id/target", requireAuth, scopeToBot, (req, res) => {
   res.json({ ok: true, disabledTargets: state.disabledTargets });
 });
 
+// Pin/unpin a target group that keeps receiving rides while the bot is paused
+app.post("/api/bot/:id/always-on", requireAuth, scopeToBot, (req, res) => {
+  const bot = botById(req.params.id);
+  const groupId = String(req.body?.groupId || "");
+  const on = req.body?.on === true;
+  if (!groupId.endsWith("@g.us")) {
+    return res.status(400).json({ error: "groupId must end with @g.us" });
+  }
+  const state = readRuntime(bot.dir);
+  const set = new Set(state.alwaysOn || []);
+  if (on) set.add(groupId); else set.delete(groupId);
+  state.alwaysOn = [...set];
+  writeRuntime(bot.dir, state);
+  audit(who(req), on ? "always-on" : "always-on-off", `${bot.id} ${groupId}`);
+  res.json({ ok: true, alwaysOn: state.alwaysOn });
+});
+
 // ── Read-only proxies to the bot's own stats server (QR / groups / stats) ──
 async function proxyBot(bot, path, res, asJson = true) {
   try {
