@@ -37,6 +37,7 @@ import {
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
   fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
 } from "@whiskeysockets/baileys";
 
 import express from "express";
@@ -592,7 +593,10 @@ export async function startBot(config, log, authDir) {
         log.info("✅ Auth loaded and locked in closure");
       }
 
-      const { version } = await fetchLatestBaileysVersion();
+      // Live web.whatsapp.com build; the GitHub-pinned one goes stale and
+      // WhatsApp then hangs new QR pairings on "connecting". Fallback if offline.
+      const live = await fetchLatestWaWebVersion({});
+      const { version } = live.isLatest ? live : await fetchLatestBaileysVersion();
       log.info(`📦 Baileys version: ${version.join(".")}`);
 
       // Suppress crypto noise (normal for large groups)
