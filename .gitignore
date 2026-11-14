@@ -57,3 +57,7 @@ core/router.js.back
 docs/
 # Text of rides with no detected city (masked) — input for scripts/unknown-cities.js
 **/unknown-cities.jsonl
+
+# bot-taxi live config, edited on the VM via control panel
+bots/bot-taxi/config.json
+bots/bot-taxi/config.json.bak-*
